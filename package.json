@@ -1,0 +1,13 @@
+{
+  "scripts": {
+    "msw:init": "npx msw init public/ --save"
+  },
+  "devDependencies": {
+    "msw": "^2.8.7"
+  },
+  "msw": {
+    "workerDirectory": [
+      "public"
+    ]
+  }
+}

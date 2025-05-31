@@ -8,6 +8,7 @@ export interface AppFlags {
   streamingSearch: boolean;
   multiChannelOutreach: boolean;
   "twilio-sms-outreach": boolean; // Added for Twilio SMS feature
+  demoMode: boolean; // Flag for enabling demo mode with mock data
   // Add other flags here as they are defined
 }
 

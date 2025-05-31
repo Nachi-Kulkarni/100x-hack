@@ -7,6 +7,8 @@ import crypto from 'crypto';
 import { SearchApiRequestBodySchema, SearchApiResponseSchema, ErrorResponseSchema } from '../../lib/schemas'; // Import Zod schemas
 import { z } from 'zod'; // Import Zod for instanceof checks
 import { PrismaClient, Candidate as PrismaCandidateModel } from '@prisma/client'; // Import Prisma Client
+import { createMockPrismaClient, MockPrismaClient } from '../../../mocks/mockPrisma'; // Adjusted path
+import { getFeatureFlag, createAnonymousUser } from '../../../lib/launchdarkly'; // Import LaunchDarkly helpers
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from './auth/[...nextauth]'; // Adjust path as necessary
 import { createAuditLog } from '../../lib/auditLog'; // Adjust path as necessary
@@ -16,7 +18,24 @@ import { rateLimiter, runMiddleware } from '../../lib/rateLimit'; // Import rate
 import { withRoleProtection } from '../../lib/authUtils'; // Import withRoleProtection
 import { Role } from '@prisma/client'; // Import Role
 
-const prisma = new PrismaClient();
+// Initialize Prisma Client based on LaunchDarkly flag
+// This promise will resolve to the appropriate Prisma client (real or mock)
+// once the feature flag is fetched.
+const prismaClientPromise: Promise<PrismaClient | MockPrismaClient> = (async () => {
+  // In a server context like API routes, user context might be derived from session or request.
+  // For a global/module-level initialization like this, using a generic or anonymous context is common.
+  const ldUser = createAnonymousUser(); // Using anonymous user for this module-level flag check
+  const isDemoModeActive = await getFeatureFlag('demoMode', ldUser, false); // Default to false
+
+  if (isDemoModeActive) {
+    console.log("search.ts: Demo mode is ACTIVE (LaunchDarkly). Using Mock Prisma Client.");
+    return createMockPrismaClient();
+  } else {
+    console.log("search.ts: Demo mode is INACTIVE (LaunchDarkly). Using Real Prisma Client.");
+    return new PrismaClient();
+  }
+})();
+
 
 // Configure the rate limiter for the search API
 const searchApiRateLimiter = rateLimiter({
@@ -263,10 +282,18 @@ Output: { "keywords": ["software engineer"], "location": "London", "skills": ["R
 
       if (operationTimedOut) throw new Error("Timeout before Prisma query.");
       // Fetch full candidate details from Prisma
+      // When using the mock, prisma.candidate.findMany is an async function.
+      // If globalThis.demoMode is true, prisma is MockPrismaClient.
+      // If globalThis.demoMode is false, prisma is PrismaClient.
+      // The call remains the same due to the similar interface for findMany.
+
+      // Await the prismaClientPromise to get the actual client instance
+      const prisma = await prismaClientPromise;
+
       const prismaCandidates = await prisma.candidate.findMany({
         where: { id: { in: pineconeCandidateIds } },
       });
-      const prismaCandidatesMap = new Map(prismaCandidates.map(pc => [pc.id, pc]));
+      const prismaCandidatesMap = new Map(prismaCandidates.map(pc => [pc.id, pc as PrismaCandidateModel])); // Cast pc to PrismaCandidateModel if mock doesn't perfectly align
 
       // Merge Pinecone matches with Prisma data
       // The EnrichedCandidateData type is now used for what scoring functions expect.

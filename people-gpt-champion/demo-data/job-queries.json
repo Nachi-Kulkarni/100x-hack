@@ -1,0 +1,31 @@
+[
+  {
+    "query": "Software Engineer with 5+ years of experience in JavaScript and React",
+    "filters": {
+      "location": "San Francisco, CA",
+      "minExperience": 5,
+      "skills": ["JavaScript", "React"]
+    },
+    "limit": 10
+  },
+  {
+    "query": "Product Manager with experience in Agile methodologies and market research",
+    "filters": {
+      "location": "New York, NY",
+      "skills": ["Agile Methodologies", "Market Research"],
+      "title": "Product Manager"
+    },
+    "limit": 5
+  },
+  {
+    "query": "Data Scientist proficient in Python, R, and machine learning",
+    "filters": {
+      "minExperience": 2,
+      "skills": ["Python", "R", "Machine Learning"],
+      "education": {
+        "degree": "Master of Science"
+      }
+    },
+    "limit": 15
+  }
+]
