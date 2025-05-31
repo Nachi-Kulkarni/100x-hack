@@ -1,10 +1,23 @@
 // people-gpt-champion/app/api/analytics/skills/route.ts
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Role } from '@prisma/client'; // Added Role
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '../../../../../pages/api/auth/[...nextauth]'; // Adjusted path
 
 const prisma = new PrismaClient();
 
 export async function GET() {
+  const session = await getServerSession(authOptions);
+
+  if (!session || !session.user || !session.user.role) {
+      return NextResponse.json({ message: 'Unauthorized: Not authenticated' }, { status: 401 });
+  }
+
+  const { role } = session.user;
+  if (role !== Role.ADMIN && role !== Role.RECRUITER) {
+      return NextResponse.json({ message: 'Forbidden: Insufficient permissions' }, { status: 403 });
+  }
+
   try {
     const candidates = await prisma.candidate.findMany({
       select: {

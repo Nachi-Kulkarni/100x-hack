@@ -203,7 +203,7 @@ const calculateCulturalFit = (candidate: EnrichedCandidateData, parsedQuery: Que
 };
 
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   // Ensure the response type can handle both success (Data) and Zod validation errors for the request
   res: NextApiResponse<Data | { error: string; issues?: z.ZodIssue[] }>
@@ -634,7 +634,7 @@ Output: { "keywords": ["software engineer"], "location": "London", "skills": ["R
 const searchHandlerLogic = handler;
 
 // Apply rate limiting first, then role protection
-const protectedSearchHandler = withRoleProtection(searchHandlerLogic, [Role.ADMIN, Role.RECRUITER]);
+const protectedSearchHandler = withRoleProtection(searchHandlerLogic, [Role.ADMIN, Role.RECRUITER, Role.USER]);
 
 export default async function finalSearchHandler(req: NextApiRequest, res: NextApiResponse) {
   // Apply rate limiter first

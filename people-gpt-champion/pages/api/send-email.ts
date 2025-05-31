@@ -129,6 +129,11 @@ async function sendEmailHandler(
     if (!validationResult.success) {
       throw validationResult.error; // Caught by ZodError handler
     }
+    // Include aiSubject and aiBody from the validated data
+    const { to: recipientEmail, templateVersionId, candidateId, subject: aiSubject, body: aiBody } = validationResult.data;
+
+    const AI_GENERATED_TEMPLATE_VERSION_ID = "cl_ai_generated_email_template_id"; // Placeholder CUID
+
     // Destructure new fields: reqSubject and reqBody
     const { to: recipientEmail, templateVersionId, candidateId, subject: reqSubject, body: reqBody } = validationResult.data;
 
@@ -141,6 +146,35 @@ async function sendEmailHandler(
     let emailSubject: string;
     let emailBody: string;
 
+    // Conditional logic for subject and body
+    let emailSubject = '';
+    let emailBody = '';
+
+    if (templateVersionId === AI_GENERATED_TEMPLATE_VERSION_ID) {
+      if (!aiSubject || !aiBody) {
+        return sendErrorResponse(res, 400, 'Subject and body are required for AI-generated emails using the generic template ID.');
+      }
+      emailSubject = aiSubject;
+      emailBody = aiBody;
+      // Ensure the generic template record exists for logging foreign key integrity, even if its content isn't used for the email itself.
+      if (!templateVersion) {
+        console.warn(`Generic AI template (ID: ${AI_GENERATED_TEMPLATE_VERSION_ID}) not found in database, but proceeding with AI content.`);
+        // Depending on strictness, you might return an error here or allow it if logging can handle a null templateVersionId gracefully
+        // For now, we allow it to proceed but the EmailOutreach record might have issues if templateVersionId is strictly required by DB schema
+        // return sendErrorResponse(res, 404, `Generic AI template (ID: ${AI_GENERATED_TEMPLATE_VERSION_ID}) not found. Please configure it.`);
+      }
+      // If templateVersion is found for AI_GENERATED_TEMPLATE_VERSION_ID, but it's archived, it's an issue.
+      // However, the concept of "archiving" a generic AI template ID might not make sense.
+      // We'll primarily rely on aiSubject and aiBody.
+    } else {
+      if (!templateVersion) {
+        return sendErrorResponse(res, 404, `Email template version not found for ID: ${templateVersionId}.`);
+      }
+      if (templateVersion.isArchived) {
+        return sendErrorResponse(res, 400, 'Selected email template version is archived and cannot be used.');
+      }
+      emailSubject = templateVersion.subject;
+      emailBody = templateVersion.body;
     if (templateVersionId) {
       // 1. Fetch the template version from the database
       const templateVersion = await prisma.emailTemplateVersion.findUnique({
@@ -168,6 +202,8 @@ async function sendEmailHandler(
     const emailOptions: EmailOptions = {
       to: recipientEmail,
       from: fromEmail,
+      subject: emailSubject, // Use the determined subject
+      html: emailBody,       // Use the determined body
       subject: emailSubject,
       html: emailBody,
     };

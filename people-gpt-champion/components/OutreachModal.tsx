@@ -43,6 +43,8 @@ interface OutreachModalProps {
   selectedCandidateIds: string[];
 }
 
+const AI_GENERATED_TEMPLATE_VERSION_ID = "cl_ai_generated_email_template_id"; // Placeholder CUID
+
 const OutreachModal: React.FC<OutreachModalProps> = ({ isOpen, onClose, selectedCandidateIds }) => {
   const [selectedChannel, setSelectedChannel] = useState<'email' | 'slack' | 'sms' | null>(null);
   const [contentStrategy, setContentStrategy] = useState<'ai' | 'template' | null>(null);
@@ -277,13 +279,31 @@ const OutreachModal: React.FC<OutreachModalProps> = ({ isOpen, onClose, selected
             continue;
         }
         sendPayload.to = contactInfo.email;
-        // sendPayload.candidateId is already top-level in sendPayload
 
         if (contentStrategy === 'template' && selectedTemplateId) {
           const template = emailTemplates.find(t => t.id === selectedTemplateId);
           const version = template?.versions?.filter(v => !v.isArchived)[0] || template?.versions?.[0];
           if (version) {
             sendPayload.templateVersionId = version.id;
+            // For template strategy, subject and body are typically from the template (handled by API)
+            // However, if they were edited in the UI, we should send them.
+            // The API should prioritize subject/body from payload if templateId is the generic AI one.
+            // For regular templates, API uses template content.
+            // To be safe, and allow UI edits of template content to be sent:
+            sendPayload.subject = content.subject;
+            sendPayload.body = content.body;
+          } else {
+            setSendStatuses(prev => prev.map(ss => ss.candidateId === content.candidateId ? { ...ss, isSending: false, sendSuccess: false, sendError: 'Valid template version not found.' } : ss));
+            continue;
+          }
+        } else if (contentStrategy === 'ai') {
+          sendPayload.subject = content.subject; // AI-generated subject
+          sendPayload.body = content.body;     // AI-generated body
+          sendPayload.templateVersionId = AI_GENERATED_TEMPLATE_VERSION_ID; // Special ID for AI content
+        } else {
+          // Should not happen if UI is correct, but as a fallback
+          setSendStatuses(prev => prev.map(ss => ss.candidateId === content.candidateId ? { ...ss, isSending: false, sendSuccess: false, sendError: 'Email content strategy unclear or template ID missing.' } : ss));
+          continue;
             // Subject and body will be fetched by the API based on templateVersionId
             // Ensure AI-specific fields are not in payload for template strategy
             delete sendPayload.subject;
@@ -306,6 +326,14 @@ const OutreachModal: React.FC<OutreachModalProps> = ({ isOpen, onClose, selected
            setSendStatuses(prev => prev.map(ss => ss.candidateId === content.candidateId ? { ...ss, isSending: false, sendSuccess: false, sendError: 'Invalid content strategy for email.' } : ss));
            continue;
         }
+
+        // Ensure subject and body are present if it's an AI email going to the endpoint
+        // The API will also validate this if templateVersionId is the AI_GENERATED_TEMPLATE_VERSION_ID
+        if (sendPayload.templateVersionId === AI_GENERATED_TEMPLATE_VERSION_ID && (!sendPayload.subject || !sendPayload.body)) {
+            setSendStatuses(prev => prev.map(ss => ss.candidateId === content.candidateId ? { ...ss, isSending: false, sendSuccess: false, sendError: 'AI-generated email is missing subject or body.' } : ss));
+            continue;
+        }
+
       } else if (selectedChannel === 'slack') {
         sendApiUrl = '/api/send-slack-message';
         // Assuming candidateProfile.id could be a placeholder for slackUserId if not explicitly available

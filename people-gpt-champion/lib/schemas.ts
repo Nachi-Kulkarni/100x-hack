@@ -190,6 +190,8 @@ export const SendEmailRequestBodySchema = z.object({
   to: z.string().email({ message: "Invalid 'to' email address (recipientEmail)." }),
   templateVersionId: z.string().cuid({ message: "Invalid Template Version ID." }),
   candidateId: z.string().cuid({ message: "Invalid Candidate ID format." }).optional(),
+  subject: z.string().optional(), // For AI-generated subject
+  body: z.string().optional(),    // For AI-generated body
 });
 
 // Schema for the success response of the send-email API

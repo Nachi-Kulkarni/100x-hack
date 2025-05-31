@@ -1,10 +1,23 @@
 // people-gpt-champion/app/api/analytics/outreach/email-stats/route.ts
 import { NextResponse, NextRequest } from 'next/server';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Role } from '@prisma/client'; // Added Role
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '../../../../../pages/api/auth/[...nextauth]'; // Adjusted path
 
 const prisma = new PrismaClient();
 
 export async function GET(request: NextRequest) {
+  const session = await getServerSession(authOptions);
+
+  if (!session || !session.user || !session.user.role) {
+      return NextResponse.json({ message: 'Unauthorized: Not authenticated' }, { status: 401 });
+  }
+
+  const { role } = session.user;
+  if (role !== Role.ADMIN && role !== Role.RECRUITER) {
+      return NextResponse.json({ message: 'Forbidden: Insufficient permissions' }, { status: 403 });
+  }
+
   try {
     const searchParams = request.nextUrl.searchParams;
     const periodParam = searchParams.get('period'); // e.g., "30d", "7d", "90d"
