@@ -8,28 +8,51 @@ import { GdprActionDetailsSchema } from '../../../../lib/schemas'; // Adjust pat
 import { z } from 'zod';
 
 // Mock next-auth
-jest.mock('next-auth/next');
+jest.mock('next-auth/next', () => ({
+  getServerSession: jest.fn(), // Default mock for getServerSession
+}));
 const mockGetServerSession = getServerSession as jest.MockedFunction<typeof getServerSession>;
 
-// Mock Prisma client
-const mockTransaction = jest.fn();
+// Declare hoisted refs for mock functions
+var mockAuditLogUpdateManyRef: jest.Mock;
+var mockUserDeleteRef: jest.Mock;
+var mockTransactionRef: jest.Mock;
+
 jest.mock('@prisma/client', () => {
-  const originalModule = jest.requireActual('@prisma/client');
+  // Create new jest.fn() instances and assign them to the hoisted refs
+  mockAuditLogUpdateManyRef = jest.fn();
+  mockUserDeleteRef = jest.fn();
+  mockTransactionRef = jest.fn(async (callback) => {
+    // Simulate the callback with the mocked methods
+    await callback({
+      auditLog: { updateMany: mockAuditLogUpdateManyRef },
+      user: { delete: mockUserDeleteRef },
+    });
+    return { count: 1 }; // Example transaction result
+  });
+
   return {
-    ...originalModule,
     PrismaClient: jest.fn().mockImplementation(() => ({
-      $transaction: mockTransaction, // Mock the $transaction method
-      auditLog: {
-        updateMany: jest.fn(),
-      },
-      user: {
-        delete: jest.fn(),
-      },
+      $transaction: mockTransactionRef,
+      // Add direct mocks for other methods if used by the handler outside transactions
+      user: { delete: mockUserDeleteRef },
+      auditLog: { updateMany: mockAuditLogUpdateManyRef },
       $disconnect: jest.fn(),
     })),
+    Prisma: { // Mock Prisma namespace if error types or enums are used
+      PrismaClientKnownRequestError: class PrismaClientKnownRequestError extends Error {
+        code: string;
+        constructor(message: string, code: string) {
+          super(message);
+          this.code = code;
+          Object.setPrototypeOf(this, PrismaClientKnownRequestError.prototype);
+        }
+      },
+      // Add other Prisma enums if needed
+      // e.g. Role: originalModule.Role (if originalModule is accessible and needed)
+    },
   };
 });
-const prismaMock = new PrismaClient() as jest.Mocked<PrismaClient>;
 
 // Mock createAuditLog
 jest.mock('../../../../lib/auditLog');
@@ -41,19 +64,24 @@ describe('/api/gdpr/delete API Endpoint', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    // Default successful transaction
-    mockTransaction.mockImplementation(async (callback) => {
-      // Simulate the operations within the transaction callback
-      const txMock = {
-        auditLog: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
-        user: { delete: jest.fn().mockResolvedValue({ id: mockUserId }) },
-      };
-      return await callback(txMock);
+    // Reset and re-configure mock implementations for each test
+    mockGetServerSession.mockResolvedValue({ // Default session for most tests
+      user: { id: mockUserId, email: 'delete@example.com', role: 'ADMIN' }, // Assuming ADMIN for GDPR ops
+      expires: 'never',
+    });
+    mockAuditLogUpdateManyRef.mockResolvedValue({ count: 1 });
+    mockUserDeleteRef.mockResolvedValue({ id: mockUserId });
+    mockTransactionRef.mockImplementation(async (callback) => {
+      await callback({
+        auditLog: { updateMany: mockAuditLogUpdateManyRef },
+        user: { delete: mockUserDeleteRef },
+      });
+      return { count: 1 };
     });
   });
 
   test('should return 401 if user is not authenticated', async () => {
-    mockGetServerSession.mockResolvedValue(null);
+    mockGetServerSession.mockResolvedValue(null); // Override session for this test
     const { req, res } = createMocks<NextApiRequest, NextApiResponse>({ method: 'POST' });
     await deleteHandler(req, res);
     expect(res._getStatusCode()).toBe(401);
@@ -63,72 +91,42 @@ describe('/api/gdpr/delete API Endpoint', () => {
   });
 
   test('should return 200 and success message for an authenticated user, auditing and performing deletion', async () => {
-    mockGetServerSession.mockResolvedValue({
-      user: { id: mockUserId, email: 'delete@example.com' },
-      expires: 'never',
-    });
+    // mockGetServerSession is already set up in beforeEach for a valid admin session
 
     const { req, res } = createMocks<NextApiRequest, NextApiResponse>({ method: 'POST' });
+    // The handler will use req.session.user.id if session is directly on req,
+    // or it relies on getServerSession internally. Our mock handles getServerSession.
     await deleteHandler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
     expect(JSON.parse(res._getData())).toEqual({
       message: 'User data deletion process initiated successfully.',
-      userId: mockUserId,
+      userId: mockUserId, // Assuming the handler uses the ID from the session for the response
     });
 
     // Verify audit log call for the deletion request
     expect(mockCreateAuditLog).toHaveBeenCalledTimes(1);
     const expectedAuditDetails: z.infer<typeof GdprActionDetailsSchema> = {
-        targetUserId: mockUserId,
+        targetUserId: mockUserId, // This should be the ID from the session
         actionType: "USER_DATA_DELETION_REQUEST",
     };
     expect(mockCreateAuditLog).toHaveBeenCalledWith(expect.objectContaining({
-        userId: mockUserId,
+        userId: mockUserId, // Actor ID from session
         action: "USER_DATA_DELETION_REQUEST",
         details: expect.objectContaining(expectedAuditDetails),
         entity: "User",
-        entityId: mockUserId,
+        entityId: mockUserId, // Target entity ID
     }));
 
     // Verify transaction was called
-    expect(mockTransaction).toHaveBeenCalledTimes(1);
-    // Access the mock implementations from the transaction callback
-    const transactionCallback = mockTransaction.mock.calls[0][0];
-    const txPrisma = {
-        auditLog: { updateMany: (prismaMock.auditLog.updateMany as jest.Mock) },
-        user: { delete: (prismaMock.user.delete as jest.Mock) }
-    };
-    // We cannot directly test the calls inside the callback this way unless we re-execute it or inspect deeper.
-    // A simpler way is to ensure the mocks passed to the transaction were called.
-    // However, the current setup re-mocks them inside the transaction.
-    // Alternative: check if the main prismaMock methods were called if transaction isn't deeply mocked.
-    // For this setup, we'll rely on the transaction mock being called.
-    // To test the operations *within* the transaction, the mock of $transaction would need to
-    // actually execute the callback with correctly mocked `tx` argument methods.
+    expect(mockTransactionRef).toHaveBeenCalledTimes(1);
 
-    // Let's refine the transaction mock to allow checking calls on tx methods
-    const mockTxAuditLogUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
-    const mockTxUserDelete = jest.fn().mockResolvedValue({ id: mockUserId });
-    mockTransaction.mockImplementationOnce(async (callback) => {
-        return await callback({
-            auditLog: { updateMany: mockTxAuditLogUpdateMany },
-            user: { delete: mockTxUserDelete },
-        });
-    });
-
-    // Re-run with refined mock for this specific test part if needed, or structure beforeEach carefully.
-    // For simplicity, assuming the above call to deleteHandler already used this refined mock if placed in beforeEach or if this is the first test using it.
-    // If not, this test would need to re-run deleteHandler(req,res) after setting up this specific mockTransaction.
-    // To be robust, let's re-run for this specific check:
-    await deleteHandler(req, res); // This will use the mockTransaction set just above if it's the first.
-                                    // Or, better, ensure the mock is set before this test runs.
-
-    expect(mockTxAuditLogUpdateMany).toHaveBeenCalledWith({
+    // Check calls to the functions used inside the transaction
+    expect(mockAuditLogUpdateManyRef).toHaveBeenCalledWith({ // Corrected to Ref
         where: { userId: mockUserId },
         data: { userId: null },
     });
-    expect(mockTxUserDelete).toHaveBeenCalledWith({
+    expect(mockUserDeleteRef).toHaveBeenCalledWith({ // Corrected to Ref
         where: { id: mockUserId },
     });
   });
@@ -138,13 +136,20 @@ describe('/api/gdpr/delete API Endpoint', () => {
       user: { id: mockUserId, email: 'notfound@example.com' },
       expires: 'never',
     });
+
     // Simulate Prisma's P2025 error for "Record to delete not found"
-    mockTransaction.mockImplementationOnce(async (callback) => {
-        const txMock = {
-            auditLog: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) }, // Assume audit logs might not exist or user has none
-            user: { delete: jest.fn().mockRejectedValue({ code: 'P2025' }) }, // Simulate user.delete failing
-        };
-        return await callback(txMock).catch(err => { throw err; }); // Propagate the error
+    // by having the user.delete mock (passed to transaction) throw the specific error
+    if (mockUserDeleteRef) mockUserDeleteRef.mockRejectedValue({ code: 'P2025' });
+    if (mockTransactionRef) mockTransactionRef.mockImplementationOnce(async (callback) => {
+        try {
+            return await callback({ // The callback will use the globally mocked mockUserDeleteRef
+                auditLog: { updateMany: mockAuditLogUpdateManyRef },
+                user: { delete: mockUserDeleteRef },
+            });
+        } catch (err) {
+            // This catch is important if the callback itself might throw before prisma ops
+            throw err;
+        }
     });
 
     const { req, res } = createMocks<NextApiRequest, NextApiResponse>({ method: 'POST' });

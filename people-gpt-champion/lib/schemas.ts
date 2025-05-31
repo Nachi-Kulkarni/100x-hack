@@ -143,6 +143,22 @@ export type IEducation = z.infer<typeof EducationSchema>;
 export type ICertification = z.infer<typeof CertificationSchema>;
 export type IParsedResume = z.infer<typeof ParsedResumeSchema>;
 
+// Schema for the /api/candidate/{id}/outreach-profile response
+// Moved up to resolve dependency for GenerateOutreachRequestBodySchema
+export const OutreachProfileResponseSchema = z.object({
+  id: z.string().cuid(),
+  name: z.string(),
+  email: z.string().email().optional().nullable(),
+  phone: z.string().optional().nullable(),
+  headline: z.string().optional().nullable(), // e.g., current role or general title
+  keySkills: z.array(z.string()).optional(),
+  experienceSummary: z.string().optional().nullable(), // Brief textual summary
+  educationSummary: z.string().optional().nullable(), // Brief textual summary
+});
+
+// TypeScript type inferred from the schema
+export type IOutreachProfileResponse = z.infer<typeof OutreachProfileResponseSchema>;
+
 // Schema for the request body of the generate-outreach API
 export const GenerateOutreachRequestBodySchema = z.object({
   template: z.enum(["intro", "job_opp", "follow_up"]),
@@ -150,7 +166,7 @@ export const GenerateOutreachRequestBodySchema = z.object({
   tone: z.string().min(1, { message: "Tone cannot be empty." }),
   channel: z.enum(["email", "slack"]),
   candidateId: z.string().cuid({ message: "Invalid Candidate ID format." }).optional(),
-  outreachProfile: OutreachProfileResponseSchema.optional(), // Defined earlier
+  outreachProfile: OutreachProfileResponseSchema.optional(),
 });
 
 // Schema for the email response of the generate-outreach API
@@ -336,9 +352,6 @@ export const OutreachProfileResponseSchema = z.object({
   experienceSummary: z.string().optional().nullable(), // Brief textual summary
   educationSummary: z.string().optional().nullable(), // Brief textual summary
 });
-
-// TypeScript type inferred from the schema
-export type IOutreachProfileResponse = z.infer<typeof OutreachProfileResponseSchema>;
 
 // Zod Schemas for Audit Log details
 

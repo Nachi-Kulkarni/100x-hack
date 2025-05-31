@@ -1,16 +1,25 @@
-// people-gpt-champion/jest.setup.js
+// Polyfill for TextEncoder and TextDecoder (must be at the top)
+import { TextEncoder, TextDecoder } from 'util';
+global.TextEncoder = TextEncoder;
+global.TextDecoder = TextDecoder;
 
-// Used for __tests__/testing-library.js
-// Learn more: https://github.com/testing-library/jest-dom
+// Polyfill for fetch
+// require('whatwg-fetch'); // whatwg-fetch does not polyfill Request, Response, Headers
+
+// Polyfill for fetch, Request, Response, Headers using node-fetch v2
+const fetch = require('node-fetch');
+if (!global.fetch) {
+  global.fetch = fetch;
+  global.Request = fetch.Request;
+  global.Response = fetch.Response;
+  global.Headers = fetch.Headers;
+}
+
 import '@testing-library/jest-dom';
 
-// Global mocks or setups from feat/core-search-api
-// e.g., environment variables for tests
-process.env.OPENAI_API_KEY = 'test_openai_key';
-process.env.PINECONE_API_KEY = 'test_pinecone_key';
-process.env.PINECONE_INDEX_NAME = 'test_pinecone_index';
-process.env.UPSTASH_REDIS_REST_URL = 'redis://mock-redis:6379'; // Dummy for tests
-
-// Add any other environment variables your application might need during tests
-// For example, if your code checks for NODE_ENV:
-process.env.NODE_ENV = 'test';
+// Environment variables for tests (if any were truly global and needed)
+// process.env.OPENAI_API_KEY = 'test_openai_key';
+// process.env.PINECONE_API_KEY = 'test_pinecone_key';
+// process.env.PINECONE_INDEX_NAME = 'test_pinecone_index';
+// process.env.UPSTASH_REDIS_REST_URL = 'redis://mock-redis:6379';
+// process.env.NODE_ENV = 'test';
