@@ -304,6 +304,27 @@ const OutreachModal: React.FC<OutreachModalProps> = ({ isOpen, onClose, selected
           // Should not happen if UI is correct, but as a fallback
           setSendStatuses(prev => prev.map(ss => ss.candidateId === content.candidateId ? { ...ss, isSending: false, sendSuccess: false, sendError: 'Email content strategy unclear or template ID missing.' } : ss));
           continue;
+            // Subject and body will be fetched by the API based on templateVersionId
+            // Ensure AI-specific fields are not in payload for template strategy
+            delete sendPayload.subject;
+            delete sendPayload.body;
+          } else {
+            setSendStatuses(prev => prev.map(ss => ss.candidateId === content.candidateId ? { ...ss, isSending: false, sendSuccess: false, sendError: 'Valid template version for A/B tracking not found.' } : ss));
+            continue;
+          }
+        } else if (contentStrategy === 'ai') {
+          if (!content.subject || !content.body) {
+                setSendStatuses(prev => prev.map(ss => ss.candidateId === content.candidateId ? { ...ss, isSending: false, sendSuccess: false, sendError: 'AI content subject or body missing.' } : ss));
+                continue;
+          }
+          sendPayload.subject = content.subject;
+          sendPayload.body = content.body;
+          // No templateVersionId for AI emails, ensure it's not carried over
+          delete sendPayload.templateVersionId;
+        } else {
+           // Should not happen if UI is structured correctly or if generate button is disabled
+           setSendStatuses(prev => prev.map(ss => ss.candidateId === content.candidateId ? { ...ss, isSending: false, sendSuccess: false, sendError: 'Invalid content strategy for email.' } : ss));
+           continue;
         }
 
         // Ensure subject and body are present if it's an AI email going to the endpoint

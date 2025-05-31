@@ -1,8 +1,13 @@
 // people-gpt-champion/pages/api/send-email.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { PrismaClient, Role } from '@prisma/client'; // Import Role
+// Updated SendEmailRequestBodySchema will be imported from schemas, so remove direct def here if it exists
+// We will define the new schema in lib/schemas.ts as per the plan,
+// but for now, let's adjust the import assuming it's moved or to be updated there.
+// For this step, we will define it inline then plan to move it.
+// import { SendEmailRequestBodySchema, ... } from '../../lib/schemas';
 import {
-    SendEmailRequestBodySchema,
+    // SendEmailRequestBodySchema, // We will redefine this below for now
     SendEmailSuccessResponseSchema, // For typing success response
     IApiErrorResponse,             // For typing error response
     OutreachSentDetailsSchema      // For audit log details
@@ -13,9 +18,33 @@ import { handleZodError, sendErrorResponse, sendSuccessResponse } from '../../li
 import { createAuditLog } from '../../lib/auditLog'; // Import createAuditLog
 import { getServerSession } from 'next-auth/next';   // For getting userId
 import { authOptions } from '../auth/[...nextauth]'; // For getting userId
-import { ZodError } from 'zod';
-import { z } from 'zod'; // For inferring type for audit log details
+import { ZodError, z } from 'zod'; // Combined z import
+// For inferring type for audit log details // z is already imported
 import { rateLimiter, runMiddleware } from '../../lib/rateLimit'; // Import rate limiting
+
+// Define the new schema here as per the plan for this file
+// Later, this definition might be moved to '../../lib/schemas.ts'
+export const SendEmailRequestBodySchema = z.object({
+  to: z.string().email(),
+  candidateId: z.string().cuid().optional(),
+  templateVersionId: z.string().cuid().optional(),
+  subject: z.string().optional(),
+  body: z.string().optional(),
+}).superRefine((data, ctx) => {
+  if (data.templateVersionId && (data.subject || data.body)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Cannot provide both templateVersionId and subject/body.",
+    });
+  }
+  if (!data.templateVersionId && (!data.subject || !data.body)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Must provide either templateVersionId or both subject and body.",
+    });
+  }
+});
+
 
 const prisma = new PrismaClient();
 
@@ -105,16 +134,17 @@ async function sendEmailHandler(
 
     const AI_GENERATED_TEMPLATE_VERSION_ID = "cl_ai_generated_email_template_id"; // Placeholder CUID
 
+    // Destructure new fields: reqSubject and reqBody
+    const { to: recipientEmail, templateVersionId, candidateId, subject: reqSubject, body: reqBody } = validationResult.data;
+
     const fromEmail = process.env.RESEND_FROM_EMAIL;
     if (!fromEmail) {
       console.error('RESEND_FROM_EMAIL environment variable is not set.');
       return sendErrorResponse(res, 500, 'Server configuration error: From email not set.');
     }
 
-    // 1. Fetch the template version from the database
-    const templateVersion = await prisma.emailTemplateVersion.findUnique({
-      where: { id: templateVersionId },
-    });
+    let emailSubject: string;
+    let emailBody: string;
 
     // Conditional logic for subject and body
     let emailSubject = '';
@@ -145,6 +175,27 @@ async function sendEmailHandler(
       }
       emailSubject = templateVersion.subject;
       emailBody = templateVersion.body;
+    if (templateVersionId) {
+      // 1. Fetch the template version from the database
+      const templateVersion = await prisma.emailTemplateVersion.findUnique({
+        where: { id: templateVersionId },
+      });
+
+      if (!templateVersion) {
+        return sendErrorResponse(res, 404, 'Email template version not found.');
+      }
+      if (templateVersion.isArchived) {
+        return sendErrorResponse(res, 400, 'Email template version is archived and cannot be used.');
+      }
+      emailSubject = templateVersion.subject;
+      emailBody = templateVersion.body;
+    } else if (reqSubject && reqBody) {
+      // Use subject and body from request for AI/custom emails
+      emailSubject = reqSubject;
+      emailBody = reqBody;
+    } else {
+      // This should be caught by Zod superRefine, but as a safeguard
+      return sendErrorResponse(res, 400, 'Invalid request: Must provide templateVersionId or both subject and body.');
     }
 
     // 2. Send the email using Resend
@@ -153,6 +204,8 @@ async function sendEmailHandler(
       from: fromEmail,
       subject: emailSubject, // Use the determined subject
       html: emailBody,       // Use the determined body
+      subject: emailSubject,
+      html: emailBody,
     };
 
     const resendResponse = await sendEmail(emailOptions);
@@ -165,11 +218,12 @@ async function sendEmailHandler(
 
     // 3. Create EmailOutreach record in the database
     const outreachData: any = {
-      templateVersionId: templateVersionId,
       recipientEmail: recipientEmail,
       resendMessageId: resendMessageId,
       status: 'sent', // Initial status
       // sentAt is defaulted by Prisma schema
+      // templateVersionId is now optional, so add it conditionally or pass as is (null/undefined if not present)
+      templateVersionId: templateVersionId,
     };
 
     if (candidateId) {
@@ -186,8 +240,9 @@ async function sendEmailHandler(
         channel: "email",
         recipient: recipientEmail,
         candidateId: candidateId || null, // Ensure null if undefined
-        templateId: templateVersionId,
+        templateId: templateVersionId || null, // Pass null if templateVersionId is not available
         messageId: resendMessageId,
+        // subject and body could be added to audit log if necessary for AI emails
       };
       const parsedAuditDetails = OutreachSentDetailsSchema.safeParse(auditDetails);
       if (parsedAuditDetails.success) {

@@ -7,7 +7,7 @@ import crypto from 'crypto';
 import { SearchApiRequestBodySchema, SearchApiResponseSchema, ErrorResponseSchema } from '../../lib/schemas'; // Import Zod schemas
 import { z } from 'zod'; // Import Zod for instanceof checks
 import { PrismaClient, Candidate as PrismaCandidateModel } from '@prisma/client'; // Import Prisma Client
-import { createMockPrismaClient, MockPrismaClient } from '../../../mocks/mockPrisma'; // Adjusted path
+// Removed direct import of mockPrisma from source code
 import { getFeatureFlag, createAnonymousUser } from '../../../lib/launchdarkly'; // Import LaunchDarkly helpers
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from './auth/[...nextauth]'; // Adjust path as necessary
@@ -20,21 +20,17 @@ import { Role } from '@prisma/client'; // Import Role
 import { redactCandidatePII } from '../../lib/piiRedactor'; // Added import
 
 // Initialize Prisma Client based on LaunchDarkly flag
-// This promise will resolve to the appropriate Prisma client (real or mock)
-// once the feature flag is fetched.
-const prismaClientPromise: Promise<PrismaClient | MockPrismaClient> = (async () => {
-  // In a server context like API routes, user context might be derived from session or request.
-  // For a global/module-level initialization like this, using a generic or anonymous context is common.
-  const ldUser = createAnonymousUser(); // Using anonymous user for this module-level flag check
-  const isDemoModeActive = await getFeatureFlag('demoMode', ldUser, false); // Default to false
-
-  if (isDemoModeActive) {
-    console.log("search.ts: Demo mode is ACTIVE (LaunchDarkly). Using Mock Prisma Client.");
-    return createMockPrismaClient();
-  } else {
-    console.log("search.ts: Demo mode is INACTIVE (LaunchDarkly). Using Real Prisma Client.");
-    return new PrismaClient();
-  }
+// This promise will resolve to the appropriate Prisma client.
+// In tests, @prisma/client is mocked, so this will use the mock.
+// In production, it uses the real PrismaClient.
+const prismaClientPromise: Promise<PrismaClient> = (async () => {
+  // The decision to use a "mock" or "real" client based on feature flags
+  // for local development or specific demo environments should ideally be handled
+  // by environment variables or a more robust DI mechanism, not by importing
+  // test mocks directly into source code.
+  // For testing, jest.mock('@prisma/client') will handle providing the mock.
+  console.log("search.ts: Initializing Prisma Client.");
+  return new PrismaClient();
 })();
 
 

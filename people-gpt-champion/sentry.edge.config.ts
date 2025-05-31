@@ -2,7 +2,7 @@
 import * as Sentry from "@sentry/nextjs";
 
 Sentry.init({
-  dsn: "https://examplePublicKey@o0.ingest.sentry.io/0", // IMPORTANT: Replace with your actual Sentry DSN
+  dsn: "https://ace9c7e365d7b7a23b5c9bafe459409a@o4509419049254912.ingest.us.sentry.io/4509419052597248", // IMPORTANT: Replace with your actual Sentry DSN
 
   // Adjust this value in production, or use tracesSampler for finer control
   tracesSampleRate: 1.0,

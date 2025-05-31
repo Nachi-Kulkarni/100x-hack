@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getRedisClient } from './redis'; // Assuming getRedisClient is exported from redis.ts
+import { getRedisClient } from '@/lib/redis'; // Changed to aliased path
 import Redis from 'ioredis';
 
 interface RateLimiterOptions {
