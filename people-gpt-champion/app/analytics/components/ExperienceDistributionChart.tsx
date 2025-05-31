@@ -54,31 +54,31 @@ const ExperienceDistributionChart = () => {
 
   if (loading) {
     return (
-      <div style={{ width: '100%', height: 300 }} className="flex items-center justify-center">
-        <p>Loading Experience Distribution...</p>
+      <div className="w-full h-[300px] flex items-center justify-center">
+        <p className="p-4 text-neutral-600 dark:text-neutral-300">Loading Experience Distribution...</p>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div style={{ width: '100%', height: 300 }} className="flex items-center justify-center">
-        <p className="text-red-500">Error: {error}</p>
+      <div className="w-full h-[300px] flex items-center justify-center">
+        <p className="p-4 text-red-600 dark:text-red-400">Error: {error}</p>
       </div>
     );
   }
 
   if (experienceData.length === 0) {
     return (
-      <div style={{ width: '100%', height: 300 }} className="flex items-center justify-center">
-        <p>No experience data available.</p>
+      <div className="w-full h-[300px] flex items-center justify-center">
+        <p className="p-4 text-neutral-600 dark:text-neutral-300">No experience data available.</p>
       </div>
     );
   }
 
   return (
-    <div style={{ width: '100%', height: 300 }}>
-      <h2 className="text-xl font-semibold mb-2">Experience Distribution</h2>
+    <div className="w-full h-[300px] bg-white dark:bg-neutral-800 p-4 rounded-lg shadow border border-neutral-200 dark:border-neutral-700">
+      <h2 className="text-lg sm:text-xl font-semibold mb-2 text-neutral-900 dark:text-neutral-100">Experience Distribution</h2>
       <ResponsiveContainer>
         <BarChart
           data={experienceData}
@@ -90,10 +90,14 @@ const ExperienceDistributionChart = () => {
           }}
         >
           <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="years" /> {/* Ensure this matches the data structure */}
-          <YAxis allowDecimals={false} />
-          <Tooltip />
-          <Legend />
+          <XAxis dataKey="years" stroke="#6b7280" className="dark:stroke-neutral-400 text-xs" /> {/* Ensure this matches the data structure */}
+          <YAxis allowDecimals={false} stroke="#6b7280" className="dark:stroke-neutral-400" />
+          <Tooltip
+            contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.8)', borderRadius: '0.375rem' }}
+            itemStyle={{ color: '#374151' }}
+            cursor={{ fill: 'rgba(209, 213, 219, 0.3)' }}
+          />
+          <Legend wrapperStyle={{ color: '#374151' }} />
           <Bar dataKey="count" fill="#82ca9d" name="Candidate Count" />
         </BarChart>
       </ResponsiveContainer>

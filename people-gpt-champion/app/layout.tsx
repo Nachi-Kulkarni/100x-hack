@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { ThemeProvider } from "../components/ThemeProvider";
 import "./globals.css";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../pages/api/auth/[...nextauth]"; // Import named export
@@ -38,6 +39,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <ThemeProvider>{children}</ThemeProvider>
         <SessionProvider session={session}>
           <header style={{ padding: "20px", borderBottom: "1px solid #eee", marginBottom: "20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <h1>People GPT Champion</h1>

@@ -400,61 +400,66 @@ const OutreachModal: React.FC<OutreachModalProps> = ({ isOpen, onClose, selected
   }
 
   return (
-    <div style={styles.overlay}>
-      <div style={styles.modal}>
-        <h2>Outreach Configuration</h2>
-        <p>Selected Candidates: {selectedCandidateIds.join(', ')}</p>
-        <p>Count: {selectedCandidateIds.length}</p>
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-neutral-800 p-6 rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto text-neutral-900 dark:text-neutral-100">
+        <h2 className="text-2xl font-semibold mb-4">Outreach Configuration</h2>
+        <p className="text-sm text-neutral-600 dark:text-neutral-300 mb-1">Selected Candidates: {selectedCandidateIds.join(', ')}</p>
+        <p className="text-sm text-neutral-600 dark:text-neutral-300 mb-4">Count: {selectedCandidateIds.length}</p>
 
-        <div>
-          <h3>Select Channel:</h3>
-          <button
-            onClick={() => handleChannelButtonClick('email')}
-            style={selectedChannel === 'email' ? styles.activeButton : styles.button}
-          >
-            Email
-          </button>
-          <button
-            onClick={() => handleChannelButtonClick('slack')}
-            style={selectedChannel === 'slack' ? styles.activeButton : styles.button}
-          >
-            Slack
-          </button>
-          <button
-            onClick={() => handleChannelButtonClick('sms')}
-            style={selectedChannel === 'sms' ? styles.activeButton : styles.button}
-          >
-            SMS
-          </button>
+        <div className="mb-6">
+          <h3 className="text-lg font-medium mb-2">Select Channel:</h3>
+          <div className="flex flex-wrap sm:flex-nowrap gap-2 sm:space-x-2">
+            <button
+              onClick={() => handleChannelButtonClick('email')}
+              className={`${selectedChannel === 'email' ? 'px-3 py-2 m-1 border border-blue-500 bg-blue-500 text-white rounded-md' : 'px-3 py-2 m-1 border border-neutral-300 dark:border-neutral-600 rounded-md hover:bg-neutral-100 dark:hover:bg-neutral-700'}`}
+            >
+              Email
+            </button>
+            <button
+              onClick={() => handleChannelButtonClick('slack')}
+              className={`${selectedChannel === 'slack' ? 'px-3 py-2 m-1 border border-blue-500 bg-blue-500 text-white rounded-md' : 'px-3 py-2 m-1 border border-neutral-300 dark:border-neutral-600 rounded-md hover:bg-neutral-100 dark:hover:bg-neutral-700'}`}
+            >
+              Slack
+            </button>
+            <button
+              onClick={() => handleChannelButtonClick('sms')}
+              className={`${selectedChannel === 'sms' ? 'px-3 py-2 m-1 border border-blue-500 bg-blue-500 text-white rounded-md' : 'px-3 py-2 m-1 border border-neutral-300 dark:border-neutral-600 rounded-md hover:bg-neutral-100 dark:hover:bg-neutral-700'}`}
+            >
+              SMS
+            </button>
+          </div>
         </div>
 
         {selectedChannel && (
-          <div style={styles.section}>
-            <h3>Content Strategy for {selectedChannel.toUpperCase()}:</h3>
-            <button
-              onClick={() => setContentStrategy('ai')}
-              style={contentStrategy === 'ai' ? styles.activeButton : styles.button}
-            >
-              Generate with AI
-            </button>
-            {selectedChannel === 'email' && (
+          <div className="mb-6 p-4 border-t border-neutral-200 dark:border-neutral-700">
+            <h3 className="text-lg font-medium mb-2">Content Strategy for {selectedChannel.toUpperCase()}:</h3>
+            <div className="flex flex-wrap sm:flex-nowrap gap-2 sm:space-x-2">
               <button
-                onClick={() => setContentStrategy('template')}
-                style={contentStrategy === 'template' ? styles.activeButton : styles.button}
+                onClick={() => setContentStrategy('ai')}
+                className={`${contentStrategy === 'ai' ? 'px-3 py-2 m-1 border border-blue-500 bg-blue-500 text-white rounded-md' : 'px-3 py-2 m-1 border border-neutral-300 dark:border-neutral-600 rounded-md hover:bg-neutral-100 dark:hover:bg-neutral-700'}`}
               >
-                Use Email Template
+                Generate with AI
               </button>
-            )}
+              {selectedChannel === 'email' && (
+                <button
+                  onClick={() => setContentStrategy('template')}
+                  className={`${contentStrategy === 'template' ? 'px-3 py-2 m-1 border border-blue-500 bg-blue-500 text-white rounded-md' : 'px-3 py-2 m-1 border border-neutral-300 dark:border-neutral-600 rounded-md hover:bg-neutral-100 dark:hover:bg-neutral-700'}`}
+                >
+                  Use Email Template
+                </button>
+              )}
+            </div>
           </div>
         )}
 
         {contentStrategy === 'ai' && (
-          <div style={styles.section}>
-            <h4>Select Tone:</h4>
+          <div className="mb-6 p-4 border-t border-neutral-200 dark:border-neutral-700">
+            <h4 className="text-md font-medium mb-2" id="tone-select-label">Select Tone:</h4>
             <select
               value={selectedTone}
               onChange={(e) => setSelectedTone(e.target.value)}
-              style={styles.select}
+              aria-labelledby="tone-select-label"
+              className="w-full p-2 my-1 border border-neutral-300 dark:border-neutral-600 rounded-md bg-white dark:bg-neutral-700 focus:ring-blue-500 focus:border-blue-500 text-neutral-700 dark:text-neutral-200"
             >
               <option value="neutral">Neutral</option>
               <option value="formal">Formal</option>
@@ -466,15 +471,16 @@ const OutreachModal: React.FC<OutreachModalProps> = ({ isOpen, onClose, selected
         )}
 
         {selectedChannel === 'email' && contentStrategy === 'template' && (
-          <div style={styles.section}>
-            <h4>Select Email Template:</h4>
+          <div className="mb-6 p-4 border-t border-neutral-200 dark:border-neutral-700">
+            <h4 className="text-md font-medium mb-2" id="template-select-label">Select Email Template:</h4>
             {isLoadingTemplates ? (
-              <p>Loading templates...</p>
+              <p className="text-neutral-600 dark:text-neutral-300">Loading templates...</p>
             ) : emailTemplates.length > 0 ? (
               <select
                 value={selectedTemplateId || ''}
                 onChange={(e) => setSelectedTemplateId(e.target.value)}
-                style={styles.select}
+                aria-labelledby="template-select-label"
+                className="w-full p-2 my-1 border border-neutral-300 dark:border-neutral-600 rounded-md bg-white dark:bg-neutral-700 focus:ring-blue-500 focus:border-blue-500 text-neutral-700 dark:text-neutral-200"
               >
                 <option value="" disabled>-- Select a template --</option>
                 {emailTemplates.map(template => (
@@ -484,190 +490,92 @@ const OutreachModal: React.FC<OutreachModalProps> = ({ isOpen, onClose, selected
                 ))}
               </select>
             ) : (
-              <p>No email templates found or failed to load.</p>
+              <p className="text-neutral-600 dark:text-neutral-300">No email templates found or failed to load.</p>
             )}
-            {/* TODO: Better version selection UI - for now, using first non-archived version */}
             {selectedTemplateId && emailTemplates.find(t => t.id === selectedTemplateId)?.versions.filter(v => !v.isArchived).length > 0 && (
-              <p style={{fontSize: '0.8em', color: '#555'}}>
+              <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
                 Using first available version of template: {emailTemplates.find(t => t.id === selectedTemplateId)?.versions.filter(v => !v.isArchived)[0]?.subject.substring(0,50)}...
               </p>
             )}
           </div>
         )}
 
-        <div style={styles.section}>
+        <div className="my-6 p-4 border-t border-neutral-200 dark:border-neutral-700">
           <button
             onClick={handleGenerateContent}
             disabled={isGenerateButtonDisabled()}
-            style={isGenerateButtonDisabled() ? styles.disabledButton : styles.actionButton}
+            className={`${isGenerateButtonDisabled() ? 'px-4 py-2 w-full text-sm font-medium rounded-md bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400 cursor-not-allowed' : 'px-4 py-2 w-full text-sm font-medium rounded-md bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700 text-white transition-colors'}`}
           >
             {isGenerating ? 'Generating...' : 'Generate & Preview Content'}
           </button>
         </div>
 
         {generatedContents.length > 0 && (
-          <div style={styles.section}>
-            <h3>Preview:</h3>
-            {generatedContents.map((content, index) => (
-              <div key={content.candidateId} style={styles.previewItem}>
-                <h4>For: {content.candidateName || content.candidateId}</h4>
-                {content.isLoading && <p>Loading content...</p>}
-                {content.error && <p style={{color: 'red'}}>Error: {content.error}</p>}
+          <div className="my-6 p-4 border-t border-neutral-200 dark:border-neutral-700 space-y-4">
+            <h3 className="text-lg font-medium">Preview:</h3>
+            {generatedContents.map((content) => (
+              <div key={content.candidateId} className="my-4 p-3 border border-neutral-200 dark:border-neutral-700 rounded-md bg-neutral-50 dark:bg-neutral-700">
+                <h4 className="text-md font-semibold mb-2">For: {content.candidateName || content.candidateId}</h4>
+                {content.isLoading && <p className="text-neutral-600 dark:text-neutral-300">Loading content...</p>}
+                {content.error && <p className="text-red-500 dark:text-red-400">Error: {content.error}</p>}
                 {!content.isLoading && !content.error && (
-                  <>
+                  <div className="space-y-3">
                     {selectedChannel === 'email' && (
-                      <div style={{marginBottom: '5px'}}>
-                        <strong>Subject:</strong>
+                      <div>
+                        <label htmlFor={`subject-${content.candidateId}`} className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">Subject:</label>
                         <input
                           type="text"
+                          id={`subject-${content.candidateId}`}
                           value={content.subject || ''}
-                          style={styles.inputField}
                           onChange={(e) => handleContentChange(content.candidateId, 'subject', e.target.value)}
                           disabled={sendStatuses.find(s => s.candidateId === content.candidateId)?.isSending}
+                          className="w-full p-2 my-1 border border-neutral-300 dark:border-neutral-600 rounded-md bg-white dark:bg-neutral-600 focus:ring-blue-500 focus:border-blue-500 text-neutral-700 dark:text-neutral-200 disabled:bg-neutral-100 dark:disabled:bg-neutral-500"
                         />
                       </div>
                     )}
                     <div>
-                      <strong>{selectedChannel === 'email' ? 'Body:' : 'Message:'}</strong>
+                      <label htmlFor={`body-${content.candidateId}`} className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">{selectedChannel === 'email' ? 'Body:' : 'Message:'}</label>
                       <textarea
+                        id={`body-${content.candidateId}`}
                         value={content.body || ''}
                         rows={selectedChannel === 'email' ? 7 : 4}
-                        style={styles.textareaField}
                         onChange={(e) => handleContentChange(content.candidateId, 'body', e.target.value)}
                         disabled={sendStatuses.find(s => s.candidateId === content.candidateId)?.isSending}
+                        className="w-full p-2 my-1 border border-neutral-300 dark:border-neutral-600 rounded-md bg-white dark:bg-neutral-600 focus:ring-blue-500 focus:border-blue-500 text-neutral-700 dark:text-neutral-200 resize-y disabled:bg-neutral-100 dark:disabled:bg-neutral-500"
                       />
                     </div>
-                  </>
+                  </div>
                 )}
                 {/* Display Send Status for this item */}
                 {sendStatuses.find(ss => ss.candidateId === content.candidateId && ss.isSending) &&
-                  <p style={{color: styles.actionButton.backgroundColor, fontWeight: 'bold'}}>Sending...</p>}
+                  <p className="mt-2 text-sm font-semibold text-blue-600 dark:text-blue-400">Sending...</p>}
                 {sendStatuses.find(ss => ss.candidateId === content.candidateId && ss.sendSuccess === true) &&
-                  <p style={{color: 'green', fontWeight: 'bold'}}>Sent successfully!</p>}
+                  <p className="mt-2 text-sm font-semibold text-green-600 dark:text-green-400">Sent successfully!</p>}
                 {sendStatuses.find(ss => ss.candidateId === content.candidateId && ss.sendSuccess === false) &&
-                  <p style={{color: 'red', fontWeight: 'bold'}}>Send failed: {sendStatuses.find(ss => ss.candidateId === content.candidateId)?.sendError}</p>}
+                  <p className="mt-2 text-sm font-semibold text-red-600 dark:text-red-400">Send failed: {sendStatuses.find(ss => ss.candidateId === content.candidateId)?.sendError}</p>}
               </div>
             ))}
           </div>
         )}
 
-        <div style={{marginTop: '30px', borderTop: '1px solid #eee', paddingTop: '20px', display: 'flex', justifyContent: 'space-between'}}>
-          <button onClick={onClose} style={{...styles.button, backgroundColor: '#6c757d', color: 'white'}}>Close</button>
+        <div className="mt-8 pt-6 border-t border-neutral-200 dark:border-neutral-700 flex justify-between items-center">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium rounded-md bg-neutral-600 hover:bg-neutral-700 text-white dark:bg-neutral-500 dark:hover:bg-neutral-600 transition-colors"
+          >
+            Close
+          </button>
           <button
             onClick={handleSendAll}
-            style={isSendAllButtonDisabled() ? styles.disabledButton : styles.actionButton}
             disabled={isSendAllButtonDisabled()}
+            className={`${isSendAllButtonDisabled() ? 'px-4 py-2 text-sm font-medium rounded-md bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400 cursor-not-allowed' : 'px-4 py-2 text-sm font-medium rounded-md bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700 text-white transition-colors'}`}
           >
-            {isBatchSending ? 'Sending...' : `Send All (${generatedContents.filter(gc => !gc.isLoading && !gc.error).length})`}
+            {isBatchSending ? 'Sending...' : `Send All (${generatedContents.filter(gc => !gc.isLoading && !gc.error && !(sendStatuses.find(ss => ss.candidateId === gc.candidateId)?.sendSuccess)).length})`}
           </button>
         </div>
       </div>
     </div>
   );
-};
-
-// Basic styling (can be improved later)
-const styles: { [key: string]: React.CSSProperties } = {
-  overlay: {
-    position: 'fixed',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 1000,
-  },
-  modal: {
-    backgroundColor: 'white',
-    padding: '20px',
-    borderRadius: '8px',
-    minWidth: '500px', // Increased minWidth
-    maxWidth: '60%',  // Adjusted maxWidth
-    maxHeight: '90vh', // Added maxHeight
-    overflowY: 'auto', // Added for scrollability
-    boxShadow: '0 2px 10px rgba(0, 0, 0, 0.1)',
-  },
-  section: { // Added style for sections
-    marginTop: '15px',
-    paddingTop: '10px',
-    borderTop: '1px solid #f0f0f0'
-  },
-  button: {
-    padding: '8px 12px',
-    margin: '0 5px',
-    cursor: 'pointer',
-    border: '1px solid #ccc',
-    borderRadius: '4px',
-  },
-  activeButton: {
-    padding: '8px 12px',
-    margin: '0 5px',
-    cursor: 'pointer',
-    border: '1px solid #007bff',
-    backgroundColor: '#007bff',
-    color: 'white',
-    borderRadius: '4px',
-  },
-  closeButton: {
-    marginTop: '20px',
-    padding: '10px 15px',
-    cursor: 'pointer',
-    border: '1px solid #ccc',
-    borderRadius: '4px',
-  },
-  actionButton: { // Style for primary actions like Generate/Send
-    padding: '10px 15px',
-    margin: '0 5px',
-    cursor: 'pointer',
-    border: '1px solid #007bff',
-    backgroundColor: '#007bff',
-    color: 'white',
-    borderRadius: '4px',
-  },
-  disabledButton: { // Style for disabled buttons
-    padding: '10px 15px',
-    margin: '0 5px',
-    cursor: 'not-allowed',
-    border: '1px solid #ccc',
-    backgroundColor: '#e9ecef',
-    color: '#6c757d',
-    borderRadius: '4px',
-  },
-  select: {
-    width: '100%',
-    padding: '8px',
-    margin: '5px 0 15px 0',
-    borderRadius: '4px',
-    border: '1px solid #ccc',
-    boxSizing: 'border-box'
-  },
-  previewItem: {
-    marginBottom: '15px',
-    padding: '10px',
-    border: '1px solid #e0e0e0',
-    borderRadius: '4px',
-    backgroundColor: '#f9f9f9',
-  },
-  inputField: { // Style for editable subject
-    width: 'calc(100% - 16px)', // Adjust for padding
-    padding: '8px',
-    margin: '5px 0',
-    border: '1px solid #ccc',
-    borderRadius: '4px',
-    boxSizing: 'border-box',
-  },
-  textareaField: { // Style for editable body/message
-    width: 'calc(100% - 16px)', // Adjust for padding
-    padding: '8px',
-    margin: '5px 0',
-    border: '1px solid #ccc',
-    borderRadius: '4px',
-    boxSizing: 'border-box',
-    minHeight: '80px',
-  }
 };
 
 export default OutreachModal;

@@ -38,31 +38,31 @@ const SkillsDistributionChart = () => {
 
   if (loading) {
     return (
-      <div style={{ width: '100%', height: 300 }} className="flex items-center justify-center">
-        <p>Loading Skills Distribution...</p>
+      <div className="w-full h-[300px] flex items-center justify-center">
+        <p className="p-4 text-neutral-600 dark:text-neutral-300">Loading Skills Distribution...</p>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div style={{ width: '100%', height: 300 }} className="flex items-center justify-center">
-        <p className="text-red-500">Error: {error}</p>
+      <div className="w-full h-[300px] flex items-center justify-center">
+        <p className="p-4 text-red-600 dark:text-red-400">Error: {error}</p>
       </div>
     );
   }
 
   if (skillsData.length === 0) {
     return (
-      <div style={{ width: '100%', height: 300 }} className="flex items-center justify-center">
-        <p>No skills data available.</p>
+      <div className="w-full h-[300px] flex items-center justify-center">
+        <p className="p-4 text-neutral-600 dark:text-neutral-300">No skills data available.</p>
       </div>
     );
   }
 
   return (
-    <div style={{ width: '100%', height: 300 }}>
-      <h2 className="text-xl font-semibold mb-2">Skills Distribution (Top 15)</h2>
+    <div className="w-full h-[300px] bg-white dark:bg-neutral-800 p-4 rounded-lg shadow border border-neutral-200 dark:border-neutral-700">
+      <h2 className="text-lg sm:text-xl font-semibold mb-2 text-neutral-900 dark:text-neutral-100">Skills Distribution (Top 15)</h2>
       <ResponsiveContainer>
         <BarChart
           data={skillsData}
@@ -74,10 +74,14 @@ const SkillsDistributionChart = () => {
           }}
         >
           <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} height={70} /> {/* Adjust XAxis for better label display */}
-          <YAxis allowDecimals={false} />
-          <Tooltip />
-          <Legend />
+          <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} height={70} stroke="#6b7280" className="dark:stroke-neutral-400 text-xs" /> {/* Adjust XAxis for better label display */}
+          <YAxis allowDecimals={false} stroke="#6b7280" className="dark:stroke-neutral-400" />
+          <Tooltip
+            contentStyle={{ backgroundColor: 'rgba(255, 255, 255, 0.8)', borderRadius: '0.375rem' }}
+            itemStyle={{ color: '#374151' }}
+            cursor={{ fill: 'rgba(209, 213, 219, 0.3)' }}
+          />
+          <Legend wrapperStyle={{ color: '#374151' }} />
           <Bar dataKey="count" fill="#8884d8" name="Candidate Count"/>
         </BarChart>
       </ResponsiveContainer>
