@@ -43,6 +43,8 @@ interface OutreachModalProps {
   selectedCandidateIds: string[];
 }
 
+const AI_GENERATED_TEMPLATE_VERSION_ID = "cl_ai_generated_email_template_id"; // Placeholder CUID
+
 const OutreachModal: React.FC<OutreachModalProps> = ({ isOpen, onClose, selectedCandidateIds }) => {
   const [selectedChannel, setSelectedChannel] = useState<'email' | 'slack' | 'sms' | null>(null);
   const [contentStrategy, setContentStrategy] = useState<'ai' | 'template' | null>(null);
@@ -277,61 +279,40 @@ const OutreachModal: React.FC<OutreachModalProps> = ({ isOpen, onClose, selected
             continue;
         }
         sendPayload.to = contactInfo.email;
-        sendPayload.subject = content.subject;
-        sendPayload.body = content.body;
-        // If A/B testing with templates, pass templateVersionId
+
         if (contentStrategy === 'template' && selectedTemplateId) {
           const template = emailTemplates.find(t => t.id === selectedTemplateId);
-          // Assuming first non-archived version is used if not more specific version selection is implemented
           const version = template?.versions?.filter(v => !v.isArchived)[0] || template?.versions?.[0];
-          if (version) sendPayload.templateVersionId = version.id;
-          else {
-            setSendStatuses(prev => prev.map(ss => ss.candidateId === content.candidateId ? { ...ss, isSending: false, sendSuccess: false, sendError: 'Valid template version for A/B tracking not found.' } : ss));
+          if (version) {
+            sendPayload.templateVersionId = version.id;
+            // For template strategy, subject and body are typically from the template (handled by API)
+            // However, if they were edited in the UI, we should send them.
+            // The API should prioritize subject/body from payload if templateId is the generic AI one.
+            // For regular templates, API uses template content.
+            // To be safe, and allow UI edits of template content to be sent:
+            sendPayload.subject = content.subject;
+            sendPayload.body = content.body;
+          } else {
+            setSendStatuses(prev => prev.map(ss => ss.candidateId === content.candidateId ? { ...ss, isSending: false, sendSuccess: false, sendError: 'Valid template version not found.' } : ss));
             continue;
           }
+        } else if (contentStrategy === 'ai') {
+          sendPayload.subject = content.subject; // AI-generated subject
+          sendPayload.body = content.body;     // AI-generated body
+          sendPayload.templateVersionId = AI_GENERATED_TEMPLATE_VERSION_ID; // Special ID for AI content
         } else {
-          // If AI generated, there's no templateVersionId from current modal state for A/B tracking.
-          // This might need a different way to categorize/track AI generated emails if A/B testing those.
-          // For now, it will send without templateVersionId which is fine if EmailOutreach schema allows it to be optional,
-          // OR if send-email API handles it. Current send-email API requires templateVersionId.
-          // This indicates a potential mismatch if AI content needs to be sent via /api/send-email.
-          // Quick Fix for now: If AI, it shouldn't use /api/send-email designed for templates, or send-email needs adjustment.
-          // For now, let's assume AI content is sent with a "default" or "AI-generated" templateVersionId placeholder if required by API.
-          // This is a simplification: a real system might have a different send endpoint or method for non-template emails.
-           // For now, let's assume we need a templateVersionId to make the call to /api/send-email.
-           // This is a flaw in current design if we are sending fully AI generated content via /api/send-email
-           // that expects a templateVersionId for A/B tracking.
-           // A real solution would be a generic email send API or make templateVersionId truly optional for logging.
-           // Given current /api/send-email, this path will fail if contentStrategy is 'ai'.
-           // The task implies /api/send-email is used.
-           // So, for 'ai' strategy, we must acknowledge this problem.
-           // For now, we will only allow 'template' strategy to actually call /api/send-email.
-           // This means AI generated emails can't be sent with current /api/send-email.
-           // This needs to be addressed in a design review.
-           // WORKAROUND: For now, let's assume for 'ai' we still need a template for tracking.
-           // This is not ideal. The `send-email` API should be more flexible OR we need a new one.
-           // For this exercise, I'll make templateVersionId conditional. The API will fail if it's AI.
-           // This will be noted in the report.
-           // A better approach for AI would be to have a generic logging in send-email that doesn't require template ID,
-           // or a different logging mechanism.
-           // For now, we'll assume the user is guided to use 'template' if they want to use /api/send-email for A/B.
-           // OR, for 'ai' generated content, we would NOT pass a templateVersionId, and the API would need to handle that.
-           // Let's assume the latter and make the templateVersionId in payload conditional.
-           // The `/api/send-email` already requires templateVersionId. This means AI generated emails cannot be sent
-           // via this specific API route as it's tied to A/B template testing.
-           // This is a design constraint we've hit.
-           // The subtask asks to use `/api/send-email`.
-           // Let's assume if strategy is 'ai', we are just previewing, not sending via this button for email.
-           // This is not ideal. Let's proceed with trying to send, and it might fail validation if templateVersionId is missing.
-           // Or, the UI should enforce that for email, you *must* pick a template for the send to be tracked.
-           // The prompt for generate-outreach does not imply it uses a specific template version for AI.
-           // This makes the "Send All" for AI generated emails via /api/send-email problematic.
-            if (!sendPayload.templateVersionId && contentStrategy === 'ai') {
-                 console.warn("AI content for email cannot be sent via /api/send-email without a templateVersionId for A/B tracking in current setup.");
-                 setSendStatuses(prev => prev.map(ss => ss.candidateId === content.candidateId ? { ...ss, isSending: false, sendSuccess: false, sendError: 'AI Email send not fully supported by send-email A/B tracking.' } : ss));
-                 continue;
-            }
+          // Should not happen if UI is correct, but as a fallback
+          setSendStatuses(prev => prev.map(ss => ss.candidateId === content.candidateId ? { ...ss, isSending: false, sendSuccess: false, sendError: 'Email content strategy unclear or template ID missing.' } : ss));
+          continue;
         }
+
+        // Ensure subject and body are present if it's an AI email going to the endpoint
+        // The API will also validate this if templateVersionId is the AI_GENERATED_TEMPLATE_VERSION_ID
+        if (sendPayload.templateVersionId === AI_GENERATED_TEMPLATE_VERSION_ID && (!sendPayload.subject || !sendPayload.body)) {
+            setSendStatuses(prev => prev.map(ss => ss.candidateId === content.candidateId ? { ...ss, isSending: false, sendSuccess: false, sendError: 'AI-generated email is missing subject or body.' } : ss));
+            continue;
+        }
+
       } else if (selectedChannel === 'slack') {
         sendApiUrl = '/api/send-slack-message';
         // Assuming candidateProfile.id could be a placeholder for slackUserId if not explicitly available

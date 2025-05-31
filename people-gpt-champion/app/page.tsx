@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import OutreachModal from '@/components/OutreachModal';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { useSession } from "next-auth/react"; // Import useSession
-import OutreachModal from '@/components/OutreachModal'; // Added import
+// Added import -- REMOVED
 import { Role } from '@prisma/client'; // Import Role enum
 
 // New Component Imports
@@ -244,26 +244,67 @@ const calculatePercentileRanks = (candidates: Candidate[]): Candidate[] => {
         // headers: { 'Content-Type': 'multipart/form-data' },
       });
 
-      const result = await response.json();
+      const result = await response.json(); // This should be IParseResumeApiResponse
 
-      if (!response.ok) {
-        throw new Error(result.error || `API Error: ${response.statusText}`);
+      if (!response.ok && response.status !== 207) { // Standard HTTP error, excluding 207
+        throw new Error(result.error || `API Error: ${response.status} ${response.statusText}`);
       }
 
-      if (result.success && result.candidate_ids) {
-        setUploadStatus(`Successfully uploaded and parsed ${result.candidate_ids.length} resume(s).`);
-        setUploadedCandidateIds(result.candidate_ids);
-        setSelectedResumes(null); // Clear selection after successful upload
-        // Optionally, trigger a refresh of candidate lists or other actions
-      } else if (result.message) { // Handle partial success or informational messages
-        setUploadStatus(result.message);
+      if (response.status === 207 && result.results && Array.isArray(result.results)) {
+        // Handle 207 Multi-Status for batch uploads
+        const successfulUploads: string[] = [];
+        const failedUploads: { file: string; message: string }[] = [];
+
+        result.results.forEach((item: { status: string; file: string; candidateId?: string; message?: string }) => {
+          if (item.status === 'success' && item.candidateId) {
+            successfulUploads.push(item.candidateId);
+          } else if (item.status === 'error') {
+            failedUploads.push({ file: item.file, message: item.message || 'Unknown error' });
+          }
+        });
+
+        setUploadedCandidateIds(successfulUploads);
+
+        let statusMsg = result.message || ''; // Start with the overall message from API
+        if (successfulUploads.length > 0) {
+          statusMsg += ` Successfully uploaded ${successfulUploads.length} resume(s).`;
+        }
+        if (failedUploads.length > 0) {
+          statusMsg += ` ${failedUploads.length} file(s) failed to upload.`;
+          const errorDetails = failedUploads.map(f => `${f.file}: ${f.message}`).join('; ');
+          setUploadError(`Failed uploads: ${errorDetails}`);
+        } else {
+          setUploadError(null); // Clear previous errors if all succeed this time
+        }
+        setUploadStatus(statusMsg.trim());
+
+        if (successfulUploads.length > 0) {
+          setSelectedResumes(null); // Clear selection if at least one was successful
+        }
+
+      } else if (response.ok) { // For non-207 success, or if API falls back to simpler success for single files
+        // This part attempts to handle a potential single success response (legacy or alternative path)
+        // It's less likely if the API always uses 207 for consistency, even for single files.
+        if (result.success && result.candidate_ids && Array.isArray(result.candidate_ids)) { // Original check
+          setUploadStatus(`Successfully uploaded and parsed ${result.candidate_ids.length} resume(s).`);
+          setUploadedCandidateIds(result.candidate_ids);
+          setSelectedResumes(null);
+        } else if (result.message) { // Generic message from API
+          setUploadStatus(result.message);
+        } else {
+          setUploadStatus("Upload completed, but response format was unexpected.");
+        }
       } else {
-        // Fallback for unexpected successful response structure
-        setUploadStatus("Upload completed, but response format was unexpected.");
+        // If response.ok is false and it's not a 207 that was handled above,
+        // this means it's an error status code that wasn't caught by the first `if (!response.ok ...)`
+        // (e.g. if result.error was not present for some reason).
+        // This path is less likely to be hit given the initial `!response.ok` check.
+        throw new Error(result.error || `API Error: ${response.status} ${response.statusText}`);
       }
+
     } catch (err: any) {
       setUploadError(err.message || "An unknown error occurred during upload.");
-      setUploadStatus(null);
+      setUploadStatus(null); // Clear status message on error
     }
   };
 
@@ -503,7 +544,7 @@ const calculatePercentileRanks = (candidates: Candidate[]): Candidate[] => {
               type="file"
               multiple
               onChange={handleResumeFileChange}
-              accept=".pdf,.doc,.docx,.txt" // Specify acceptable file types
+              accept=".pdf,.docx" // Specify acceptable file types - aligned with backend
               style={{ display: 'block', marginBottom: '10px' }}
             />
             <button
@@ -552,20 +593,21 @@ const calculatePercentileRanks = (candidates: Candidate[]): Candidate[] => {
               setIsOutreachModalOpen(true);
             }
           }}
-          // Disable outreach button for RECRUITERs, enable for ADMIN and USER (example logic)
-          disabled={selectedCandidateIds.length === 0 || userRole === Role.RECRUITER}
+          // Align outreach button with API permissions (ADMIN or RECRUITER)
+          disabled={selectedCandidateIds.length === 0 || !(userRole === Role.ADMIN || userRole === Role.RECRUITER)}
+          title={!(userRole === Role.ADMIN || userRole === Role.RECRUITER) ? "Outreach available for Admin/Recruiter roles only" : "Initiate outreach to selected candidates"}
           style={{
             padding: '10px 15px',
             fontSize: '16px',
-            cursor: (selectedCandidateIds.length === 0 || userRole === Role.RECRUITER) ? 'not-allowed' : 'pointer',
+            cursor: (selectedCandidateIds.length === 0 || !(userRole === Role.ADMIN || userRole === Role.RECRUITER)) ? 'not-allowed' : 'pointer',
             border: 'none',
-            backgroundColor: (selectedCandidateIds.length === 0 || userRole === Role.RECRUITER) ? '#ccc' : '#28a745',
+            backgroundColor: (selectedCandidateIds.length === 0 || !(userRole === Role.ADMIN || userRole === Role.RECRUITER)) ? '#ccc' : '#28a745',
             color: 'white',
             borderRadius: '4px',
             marginLeft: '10px'
           }}
         >
-          Initiate Outreach ({selectedCandidateIds.length}) {userRole === Role.RECRUITER ? "(Disabled for Recruiters)" : ""}
+          Initiate Outreach ({selectedCandidateIds.length})
         </button>
       </div>
 
@@ -674,7 +716,8 @@ const calculatePercentileRanks = (candidates: Candidate[]): Candidate[] => {
                   setIsOutreachModalOpen(true);
                 }
               }}
-              disabled={selectedCandidateIds.length === 0}
+              disabled={selectedCandidateIds.length === 0 || !(userRole === Role.ADMIN || userRole === Role.RECRUITER)}
+              title={!(userRole === Role.ADMIN || userRole === Role.RECRUITER) ? "Outreach available for Admin/Recruiter roles only" : "Initiate outreach to selected candidates"}
               className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg shadow-md transition-colors duration-150 ease-in-out disabled:bg-neutral-400 dark:disabled:bg-neutral-600 disabled:cursor-not-allowed"
             >
               Initiate Outreach ({selectedCandidateIds.length})

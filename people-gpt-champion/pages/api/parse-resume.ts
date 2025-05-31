@@ -179,6 +179,7 @@ async function processResumeFile(file: Express.Multer.File): Promise<ProcessResu
       ? encrypt(validatedData.personal_info.address)
       : null;
 
+    // Creates a new candidate. If email already exists, Prisma P2002 error is caught and reported for this file.
     const newCandidate = await prisma.candidate.create({
       data: {
         name: validatedData.personal_info.name,
@@ -333,7 +334,8 @@ const parseResumeRateLimiter = rateLimiter({
   keyPrefix: 'parse_resume',
 });
 
-const protectedParseResumeHandler = withRoleProtection(parseResumeRouteLogic, [Role.ADMIN, Role.RECRUITER]);
+// API endpoint restricted to ADMIN-only, aligning with UI presentation.
+const protectedParseResumeHandler = withRoleProtection(parseResumeRouteLogic, [Role.ADMIN]);
 
 export default async function handler(
   req: NextApiRequest & { files?: Express.Multer.File[] }, // Ensure NextApiRequest is correctly typed for multer

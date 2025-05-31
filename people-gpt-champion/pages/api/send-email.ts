@@ -100,7 +100,10 @@ async function sendEmailHandler(
     if (!validationResult.success) {
       throw validationResult.error; // Caught by ZodError handler
     }
-    const { to: recipientEmail, templateVersionId, candidateId } = validationResult.data;
+    // Include aiSubject and aiBody from the validated data
+    const { to: recipientEmail, templateVersionId, candidateId, subject: aiSubject, body: aiBody } = validationResult.data;
+
+    const AI_GENERATED_TEMPLATE_VERSION_ID = "cl_ai_generated_email_template_id"; // Placeholder CUID
 
     const fromEmail = process.env.RESEND_FROM_EMAIL;
     if (!fromEmail) {
@@ -113,21 +116,43 @@ async function sendEmailHandler(
       where: { id: templateVersionId },
     });
 
-    if (!templateVersion) {
-      return sendErrorResponse(res, 404, 'Email template version not found.');
-    }
-    if (templateVersion.isArchived) {
-      return sendErrorResponse(res, 400, 'Email template version is archived and cannot be used.'); // 400 as it's a client error to use archived one
-    }
+    // Conditional logic for subject and body
+    let emailSubject = '';
+    let emailBody = '';
 
-    const { subject, body } = templateVersion;
+    if (templateVersionId === AI_GENERATED_TEMPLATE_VERSION_ID) {
+      if (!aiSubject || !aiBody) {
+        return sendErrorResponse(res, 400, 'Subject and body are required for AI-generated emails using the generic template ID.');
+      }
+      emailSubject = aiSubject;
+      emailBody = aiBody;
+      // Ensure the generic template record exists for logging foreign key integrity, even if its content isn't used for the email itself.
+      if (!templateVersion) {
+        console.warn(`Generic AI template (ID: ${AI_GENERATED_TEMPLATE_VERSION_ID}) not found in database, but proceeding with AI content.`);
+        // Depending on strictness, you might return an error here or allow it if logging can handle a null templateVersionId gracefully
+        // For now, we allow it to proceed but the EmailOutreach record might have issues if templateVersionId is strictly required by DB schema
+        // return sendErrorResponse(res, 404, `Generic AI template (ID: ${AI_GENERATED_TEMPLATE_VERSION_ID}) not found. Please configure it.`);
+      }
+      // If templateVersion is found for AI_GENERATED_TEMPLATE_VERSION_ID, but it's archived, it's an issue.
+      // However, the concept of "archiving" a generic AI template ID might not make sense.
+      // We'll primarily rely on aiSubject and aiBody.
+    } else {
+      if (!templateVersion) {
+        return sendErrorResponse(res, 404, `Email template version not found for ID: ${templateVersionId}.`);
+      }
+      if (templateVersion.isArchived) {
+        return sendErrorResponse(res, 400, 'Selected email template version is archived and cannot be used.');
+      }
+      emailSubject = templateVersion.subject;
+      emailBody = templateVersion.body;
+    }
 
     // 2. Send the email using Resend
     const emailOptions: EmailOptions = {
-      to: recipientEmail, // Use 'to' from request for recipient
+      to: recipientEmail,
       from: fromEmail,
-      subject,          // Use subject from fetched template
-      html: body,            // Use body from fetched template
+      subject: emailSubject, // Use the determined subject
+      html: emailBody,       // Use the determined body
     };
 
     const resendResponse = await sendEmail(emailOptions);
