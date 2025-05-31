@@ -5,13 +5,26 @@ import {
   SlackOutreachResponseSchema,
   IOutreachProfileResponse, // For type hinting
   OutreachProfileResponseSchema, // For validating provided profile and fetched profile
+  IApiErrorResponse, // For error responses
+  IEmailOutreachResponse, // For success response typing
+  ISlackOutreachResponse // For success response typing
 } from '../../lib/schemas';
-// import { OpenAI } from '../../lib/openai'; // Assuming this is where the OpenAI client is initialized
-// Corrected import:
+import { rateLimiter, runMiddleware } from '../../lib/rateLimit';
+import { withRoleProtection } from '../../lib/authUtils';
+import { Role, PrismaClient, Prisma } from '@prisma/client'; // PrismaClient already imported, added Prisma for types
+// import { OpenAI } from '../../lib/openai';
 import { chatCompletionBreaker } from '../../lib/openai';
-import { PrismaClient, Candidate, Prisma } from '@prisma/client'; // Added Prisma
+import { handleZodError, sendErrorResponse, sendSuccessResponse } from '../../lib/apiUtils'; // Standard helpers
+import { ZodError } from 'zod'; // To catch Zod errors
 
 const prisma = new PrismaClient();
+
+// Configure the rate limiter for the generate-outreach API
+const outreachApiRateLimiter = rateLimiter({
+  windowSeconds: 60, // 1 minute
+  maxRequests: 5,    // 5 requests per minute per IP
+  keyPrefix: 'generate_outreach_api',
+});
 
 // Helper types for JSON data transformation (consistent with outreach-profile API)
 interface ResumeSkill { // These could be moved to a shared types file if used elsewhere
@@ -191,40 +204,27 @@ async function getResolvedOutreachProfileHelper(candidateId: string): Promise<IO
  *      properties:
  *        message: { type: "string" }
  */
-export default async function handler(
+async function generateOutreachHandler(
   req: NextApiRequest,
-  res: NextApiResponse
+  res: NextApiResponse<IEmailOutreachResponse | ISlackOutreachResponse | IApiErrorResponse>
 ) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return res.status(405).json({ message: `Method ${req.method} Not Allowed` });
-  }
-
-  // Validate request body
-  const validationResult = GenerateOutreachRequestBodySchema.safeParse(req.body);
-  if (!validationResult.success) {
-    return res.status(400).json({ errors: validationResult.error.flatten() });
-  }
-
-  const { template, vars, tone, channel, candidateId } = validationResult.data;
-  let { outreachProfile: providedOutreachProfile } = validationResult.data;
-
+  // Role and RateLimit are handled by wrappers. Method check by outer handler.
   try {
+    // Validate request body
+    const validationResult = GenerateOutreachRequestBodySchema.safeParse(req.body);
+    if (!validationResult.success) {
+      throw validationResult.error; // Caught by ZodError handler below
+    }
+    const { template, vars, tone, channel, candidateId } = validationResult.data;
+    let { outreachProfile: providedOutreachProfile } = validationResult.data;
+
     let resolvedOutreachProfile: IOutreachProfileResponse | null | undefined = providedOutreachProfile;
 
     if (candidateId && !resolvedOutreachProfile) {
-      try {
         resolvedOutreachProfile = await getResolvedOutreachProfileHelper(candidateId);
         if (!resolvedOutreachProfile) {
-          return res.status(404).json({ message: 'Candidate not found for the provided candidateId.' });
+          return sendErrorResponse(res, 404, 'Candidate not found for the provided candidateId.');
         }
-      } catch (profileError: any) {
-        console.error(`Error resolving profile for candidateId ${candidateId} in API handler:`, profileError.message);
-        if (profileError.message.includes("Invalid data format") || profileError.message.includes("Failed to correctly transform")) {
-             return res.status(500).json({ message: profileError.message}); // Use 500 as it's a server-side transformation/data issue
-        }
-        return res.status(500).json({ message: `Error fetching candidate profile: ${profileError.message}` });
-      }
     }
 
     let systemPrompt = "You are an expert at crafting outreach messages. Follow the user's instructions carefully regarding channel, tone, and variables. Output *only* valid JSON that strictly adheres to the requested format.";
@@ -282,51 +282,71 @@ export default async function handler(
 
     if (!generatedText) {
       console.error("OpenAI response content is null or undefined. Full completion:", completion);
-      throw new Error('OpenAI did not return content.');
+      return sendErrorResponse(res, 500, 'OpenAI did not return content.');
     }
 
-    try {
-      const parsedContent = JSON.parse(generatedText);
+    const parsedContent = JSON.parse(generatedText); // Can throw if not JSON
 
-      if (channel === 'email') {
-        const validation = EmailOutreachResponseSchema.safeParse(parsedContent);
-        if (!validation.success) {
-          console.error("OpenAI response did not match EmailOutreachResponseSchema. Errors:", validation.error.flatten(), "Raw content:", generatedText);
-          throw new Error('OpenAI response validation failed for email.');
-        }
-        return res.status(200).json(validation.data);
-      } else { // slack
-        const validation = SlackOutreachResponseSchema.safeParse(parsedContent);
-        if (!validation.success) {
-          console.error("OpenAI response did not match SlackOutreachResponseSchema. Errors:", validation.error.flatten(), "Raw content:", generatedText);
-          throw new Error('OpenAI response validation failed for Slack.');
-        }
-        return res.status(200).json(validation.data);
+    if (channel === 'email') {
+      const validation = EmailOutreachResponseSchema.safeParse(parsedContent);
+      if (!validation.success) {
+        console.error("OpenAI response did not match EmailOutreachResponseSchema. Errors:", validation.error.flatten(), "Raw content:", generatedText);
+        return sendErrorResponse(res, 500, 'OpenAI response validation failed for email structure.', validation.error.flatten());
       }
-    } catch (e: any) {
-      console.error("Error parsing OpenAI JSON response:", e.message);
-      console.error("Raw OpenAI response string that failed parsing:", generatedText);
-      throw new Error('Error processing OpenAI response: Malformed JSON.');
+      return sendSuccessResponse(res, 200, validation.data);
+    } else { // slack
+      const validation = SlackOutreachResponseSchema.safeParse(parsedContent);
+      if (!validation.success) {
+        console.error("OpenAI response did not match SlackOutreachResponseSchema. Errors:", validation.error.flatten(), "Raw content:", generatedText);
+        return sendErrorResponse(res, 500, 'OpenAI response validation failed for Slack structure.', validation.error.flatten());
+      }
+      return sendSuccessResponse(res, 200, validation.data);
     }
 
   } catch (error: any) {
-    // Check if error is from Opossum (circuit breaker)
+    if (error instanceof ZodError) {
+      return handleZodError(error, res);
+    }
+    if (error instanceof SyntaxError) { // From JSON.parse()
+        console.error("Error parsing OpenAI JSON response:", error.message, "Raw content:", generatedText); // generatedText might be out of scope here
+        return sendErrorResponse(res, 500, 'Error processing OpenAI response: Malformed JSON.');
+    }
     if (error.name === 'CircuitBreakerError') {
       console.error('Circuit breaker is open for OpenAI:', error.message);
-      return res.status(503).json({ message: 'Service unavailable. OpenAI is currently overloaded or down. Please try again later.' });
+      return sendErrorResponse(res, 503, 'Service unavailable. OpenAI is currently overloaded or down. Please try again later.');
     }
-    // Catch errors from getResolvedOutreachProfileHelper if they weren't handled before OpenAI call
-    if (error.message.includes("Error fetching candidate profile") ||
-        error.message.includes("Failed to correctly transform candidate data") ||
-        error.message.includes("Invalid data format in database")) {
-        // Already logged in getResolvedOutreachProfileHelper, so just return
-        return res.status(500).json({ message: error.message });
+    // Catch errors from getResolvedOutreachProfileHelper
+    if (error.message.includes("Candidate not found") ||
+        error.message.includes("Invalid data format") ||
+        error.message.includes("Failed to correctly transform")) {
+        return sendErrorResponse(res, error.message.includes("Candidate not found") ? 404 : 500, error.message);
     }
     console.error('Error generating outreach content:', error.message, error.stack);
-    return res.status(500).json({ message: 'Internal Server Error', error: error.message });
+    return sendErrorResponse(res, 500, 'Internal Server Error', error.message);
   } finally {
     await prisma.$disconnect().catch(async (e) => {
       console.error("Failed to disconnect Prisma client", e);
     });
   }
+}
+
+// Apply rate limiting first, then role protection
+const protectedHandler = withRoleProtection(generateOutreachHandler, [Role.ADMIN, Role.RECRUITER]);
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Apply rate limiter first
+  try {
+    await runMiddleware(req, res, outreachApiRateLimiter);
+  } catch (error: any) {
+    // Rate limiter already sent response if it's a 429, or an error during its execution
+    // Log if needed, but don't send another response from here.
+    if (error.message.includes("Too Many Requests")) {
+        console.warn(`Rate limit exceeded for generate-outreach API from IP: ${req.ip || req.headers['x-forwarded-for']}`);
+    } else {
+        console.error("Error in generate-outreach rate limiting middleware (outer handler):", error);
+    }
+    return;
+  }
+  // If rate limiter passes, proceed to the role-protected handler
+  return protectedHandler(req, res);
 }

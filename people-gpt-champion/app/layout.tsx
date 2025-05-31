@@ -2,6 +2,11 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "../components/ThemeProvider";
 import "./globals.css";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "../pages/api/auth/[...nextauth]"; // Import named export
+import SignInButton from "../components/auth/SignInButton"; // Adjusted path
+import SignOutButton from "../components/auth/SignOutButton"; // Adjusted path
+import { SessionProvider } from "next-auth/react"; // Now using SessionProvider
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -23,12 +28,36 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // It's generally recommended to pass the session from a Server Component to Client Components
+  // rather than using SessionProvider in the root layout if you're primarily using Server Components.
+  // However, if you have many client components needing session, SessionProvider can be useful.
+  // For this step, we'll fetch session on the server and pass it to SessionProvider.
+  const session = await getServerSession(authOptions); // Use the imported authOptions
+
   return (
     <html lang="en">
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <ThemeProvider>{children}</ThemeProvider>
+        <SessionProvider session={session}>
+          <header style={{ padding: "20px", borderBottom: "1px solid #eee", marginBottom: "20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h1>People GPT Champion</h1>
+            <div>
+              {session?.user ? (
+                <div style={{display: "flex", alignItems: "center"}}>
+                  <p style={{marginRight: "10px"}}>Signed in as {session.user.name || session.user.email}</p>
+                  <SignOutButton />
+                </div>
+              ) : (
+                <SignInButton />
+              )}
+            </div>
+          </header>
+          <main style={{padding: "20px"}}>
+            {children}
+          </main>
+        </SessionProvider>
       </body>
     </html>
   );

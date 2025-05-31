@@ -335,3 +335,155 @@ export const OutreachProfileResponseSchema = z.object({
 
 // TypeScript type inferred from the schema
 export type IOutreachProfileResponse = z.infer<typeof OutreachProfileResponseSchema>;
+
+// Zod Schemas for Audit Log details
+
+// Details for user login events
+export const LoginActionDetailsSchema = z.object({
+  ipAddress: z.string().ip({ version: "v4", message: "Invalid IPv4 address" }).optional().nullable(),
+  userAgent: z.string().optional().nullable(),
+  // You could add `provider: z.string()` if you want to log the OAuth provider used
+});
+export type ILoginActionDetails = z.infer<typeof LoginActionDetailsSchema>;
+
+// Details for candidate search events
+export const CandidateSearchActionDetailsSchema = z.object({
+  query: z.string(),
+  filtersApplied: z.any().optional().nullable(), // Could be more specific if filters structure is known
+  resultsCount: z.number().int().optional().nullable(),
+  weightsUsed: z.object({
+    w_skill: z.number().optional().nullable(),
+    w_experience: z.number().optional().nullable(),
+    w_culture: z.number().optional().nullable(),
+  }).optional().nullable(),
+});
+export type ICandidateSearchActionDetails = z.infer<typeof CandidateSearchActionDetailsSchema>;
+
+// Details for accessing an admin-specific route
+export const AdminAccessActionDetailsSchema = z.object({
+  route: z.string().startsWith('/', { message: "Route must start with /" }),
+  method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"]).optional().nullable(),
+});
+export type IAdminAccessActionDetails = z.infer<typeof AdminAccessActionDetailsSchema>;
+
+// General details schema for actions where only a simple message or note is needed
+export const GenericActionDetailsSchema = z.object({
+  note: z.string(),
+  extraData: z.any().optional().nullable(),
+});
+export type IGenericActionDetails = z.infer<typeof GenericActionDetailsSchema>;
+
+// Schemas for GDPR API Payloads
+
+// Schema for a single AuditLog entry to be included in the user data export
+const AuditLogExportEntrySchema = z.object({
+  id: z.string().cuid(),
+  createdAt: z.string().datetime(), // Or z.date() if transformed
+  action: z.string(),
+  details: z.any().optional().nullable(), // Keep as any/JSON for flexibility in export
+  entity: z.string().optional().nullable(),
+  entityId: z.string().optional().nullable(),
+});
+
+// Schema for the user's own data in the export
+const UserExportDataSchema = z.object({
+  id: z.string().cuid(),
+  email: z.string().email().optional().nullable(),
+  name: z.string().optional().nullable(),
+  role: z.string(), // Assuming role is always present for an exported user
+  image: z.string().url().optional().nullable(),
+  emailVerified: z.string().datetime().optional().nullable(), // Or z.date()
+  // Add other fields from the User model that should be exported
+});
+
+// Schema for the overall structure of the exported user data
+export const UserDataExportSchema = z.object({
+  userData: UserExportDataSchema,
+  auditLogs: z.array(AuditLogExportEntrySchema),
+  // Potentially add other related data here, e.g.:
+  // queriesMade: z.array(QueryExportEntrySchema),
+});
+export type IUserDataExport = z.infer<typeof UserDataExportSchema>;
+
+
+// Schema for details in AuditLog when a GDPR action is performed
+export const GdprActionDetailsSchema = z.object({
+  targetUserId: z.string().cuid({ message: "Target User ID for GDPR action must be a CUID." }),
+  actionType: z.enum(["USER_DATA_EXPORT_REQUEST", "USER_DATA_DELETION_REQUEST"]),
+  // Requester info might be redundant if audit log captures acting user, but useful if system performs action
+  requesterIpAddress: z.string().ip().optional().nullable(),
+});
+export type IGdprActionDetails = z.infer<typeof GdprActionDetailsSchema>;
+
+// Schema for /api/health query parameters
+export const HealthQuerySchema = z.object({
+  quick: z.string().optional().transform(val => val === 'true' || val === '1'), // Coerce "true" or "1" to boolean
+});
+export type IHealthQuery = z.infer<typeof HealthQuerySchema>;
+
+// Schema for /api/health response
+export const HealthResponseSchema = z.object({
+  status: z.enum(['ok', 'degraded', 'error']),
+  timestamp: z.string().datetime(),
+  checks: z.record(z.string(), z.object({
+    status: z.string(),
+    message: z.string().optional(),
+    durationMs: z.number().optional(),
+  })).optional().nullable(),
+});
+export type IHealthResponse = z.infer<typeof HealthResponseSchema>;
+
+// Schema for path parameter validation (e.g., candidate ID)
+export const CandidateIdParamSchema = z.object({
+  id: z.string().cuid({ message: "Invalid Candidate ID format in path parameter." }),
+});
+export type ICandidateIdParam = z.infer<typeof CandidateIdParamSchema>;
+
+// Generic error response schema for API routes (can be used with handleZodError)
+export const ApiErrorResponseSchema = z.object({
+  message: z.string(),
+  errors: z.record(z.string(), z.array(z.string()).optional()).optional().nullable(), // For Zod flattened field errors
+  details: z.any().optional().nullable(), // For other types of error details
+});
+export type IApiErrorResponse = z.infer<typeof ApiErrorResponseSchema>;
+
+// Audit Log Detail Schemas - New Additions
+export const CandidateCreateActionDetailsSchema = z.object({
+  candidateId: z.string().cuid({ message: "Candidate ID must be a CUID."}),
+  source: z.string().optional().nullable(), // e.g., "resume_parse", "manual_entry"
+  fileName: z.string().optional().nullable(), // Added fileName
+});
+export type ICandidateCreateActionDetails = z.infer<typeof CandidateCreateActionDetailsSchema>;
+
+export const OutreachSentDetailsSchema = z.object({
+  channel: z.enum(['email', 'sms', 'slack', 'linkedin']), // Add 'linkedin' or others as needed
+  recipient: z.string(), // Email address, phone number, Slack User ID
+  candidateId: z.string().cuid({ message: "Candidate ID must be a CUID."}).optional().nullable(),
+  templateId: z.string().optional().nullable(), // e.g., EmailTemplateVersion ID
+  messageId: z.string().optional().nullable(), // e.g., Resend ID, Twilio SID, Slack message_ts
+});
+export type IOutreachSentDetails = z.infer<typeof OutreachSentDetailsSchema>;
+
+// Schema for individual file processing result in /api/parse-resume
+const ResumeProcessResultSchema = z.union([
+  z.object({
+    status: z.literal('success'),
+    file: z.string(),
+    candidateId: z.string().cuid(),
+    data: CandidateSchema, // Use the existing detailed CandidateSchema
+  }),
+  z.object({
+    status: z.literal('error'),
+    file: z.string(),
+    message: z.string(),
+    errorDetail: z.string().optional().nullable(),
+  }),
+]);
+export type IResumeProcessResult = z.infer<typeof ResumeProcessResultSchema>;
+
+// Schema for the overall response of /api/parse-resume
+export const ParseResumeApiResponseSchema = z.object({
+  message: z.string(),
+  results: z.array(ResumeProcessResultSchema),
+});
+export type IParseResumeApiResponse = z.infer<typeof ParseResumeApiResponseSchema>;

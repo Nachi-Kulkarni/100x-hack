@@ -7,8 +7,42 @@ import crypto from 'crypto';
 import { SearchApiRequestBodySchema, SearchApiResponseSchema, ErrorResponseSchema } from '../../lib/schemas'; // Import Zod schemas
 import { z } from 'zod'; // Import Zod for instanceof checks
 import { PrismaClient, Candidate as PrismaCandidateModel } from '@prisma/client'; // Import Prisma Client
+import { createMockPrismaClient, MockPrismaClient } from '../../../mocks/mockPrisma'; // Adjusted path
+import { getFeatureFlag, createAnonymousUser } from '../../../lib/launchdarkly'; // Import LaunchDarkly helpers
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from './auth/[...nextauth]'; // Adjust path as necessary
+import { createAuditLog } from '../../lib/auditLog'; // Adjust path as necessary
+import { CandidateSearchActionDetailsSchema } from '../../lib/schemas'; // Adjust path
+import { decrypt } from '../../lib/encryption'; // Import decrypt
+import { rateLimiter, runMiddleware } from '../../lib/rateLimit'; // Import rate limiting utilities
+import { withRoleProtection } from '../../lib/authUtils'; // Import withRoleProtection
+import { Role } from '@prisma/client'; // Import Role
 
-const prisma = new PrismaClient();
+// Initialize Prisma Client based on LaunchDarkly flag
+// This promise will resolve to the appropriate Prisma client (real or mock)
+// once the feature flag is fetched.
+const prismaClientPromise: Promise<PrismaClient | MockPrismaClient> = (async () => {
+  // In a server context like API routes, user context might be derived from session or request.
+  // For a global/module-level initialization like this, using a generic or anonymous context is common.
+  const ldUser = createAnonymousUser(); // Using anonymous user for this module-level flag check
+  const isDemoModeActive = await getFeatureFlag('demoMode', ldUser, false); // Default to false
+
+  if (isDemoModeActive) {
+    console.log("search.ts: Demo mode is ACTIVE (LaunchDarkly). Using Mock Prisma Client.");
+    return createMockPrismaClient();
+  } else {
+    console.log("search.ts: Demo mode is INACTIVE (LaunchDarkly). Using Real Prisma Client.");
+    return new PrismaClient();
+  }
+})();
+
+
+// Configure the rate limiter for the search API
+const searchApiRateLimiter = rateLimiter({
+  windowSeconds: 60, // 1 minute
+  maxRequests: 10,   // 10 requests per minute per IP
+  keyPrefix: 'search_api',
+});
 
 // people-gpt-champion/lib/schemas.ts (for reference, not to be changed here)
 // export const ScoreBreakdownSchema = z.object({
@@ -49,22 +83,26 @@ interface QueryParameters {
   skills?: string[];
 }
 
-// The main Candidate type will be inferred from SearchApiResponseSchema.candidates[number]
 // Type for enriched candidate data used by scoring functions
-// Assumes structure after merging Prisma data with Pinecone results.
-// Prisma types are available via PrismaCandidateModel, WorkExperience, Education from @prisma/client
-// but we map them to a consistent structure for scoring.
 interface EnrichedCandidateData {
   id: string;
   name: string | null;
   title: string | null;
-  skills: string[] | null; // Ensure this is string[] after merge
-  workExperience?: PrismaCandidateModel['workExperience'] | null; // Use Prisma's generated type if available and suitable
-  education?: PrismaCandidateModel['education'] | null; // Use Prisma's generated type
-  raw_resume_text?: string | null;
-  // profile_summary is effectively replaced by workExperience descriptions or raw_resume_text
+  // Contact info - will be decrypted if present
+  email?: string | null; // Not encrypted, but good to have here
+  phone?: string | null;
+  address?: string | null;
+
+  skills: string[] | null;
+  workExperience?: PrismaCandidateModel['workExperience'] | null;
+  education?: PrismaCandidateModel['education'] | null;
+  raw_resume_text?: string | null; // This will be the decrypted resume text
   source_url: string | null;
   pinecone_score?: number;
+  // Other fields from Prisma model that might be encrypted or needed for scoring
+  linkedinUrl?: string | null;
+  githubUrl?: string | null;
+  certifications?: PrismaCandidateModel['certifications'] | null;
 }
 
 
@@ -146,10 +184,8 @@ export default async function handler(
   // Ensure the response type can handle both success (Data) and Zod validation errors for the request
   res: NextApiResponse<Data | { error: string; issues?: z.ZodIssue[] }>
 ) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return res.status(405).json({ error: 'Method Not Allowed' });
-  }
+  // Rate limiting and role protection are handled by the wrappers around searchHandlerLogic
+  // Method check (POST) is also handled before this main logic
 
   // Validate request body
   const validationResult = SearchApiRequestBodySchema.safeParse(req.body);
@@ -246,10 +282,18 @@ Output: { "keywords": ["software engineer"], "location": "London", "skills": ["R
 
       if (operationTimedOut) throw new Error("Timeout before Prisma query.");
       // Fetch full candidate details from Prisma
+      // When using the mock, prisma.candidate.findMany is an async function.
+      // If globalThis.demoMode is true, prisma is MockPrismaClient.
+      // If globalThis.demoMode is false, prisma is PrismaClient.
+      // The call remains the same due to the similar interface for findMany.
+
+      // Await the prismaClientPromise to get the actual client instance
+      const prisma = await prismaClientPromise;
+
       const prismaCandidates = await prisma.candidate.findMany({
         where: { id: { in: pineconeCandidateIds } },
       });
-      const prismaCandidatesMap = new Map(prismaCandidates.map(pc => [pc.id, pc]));
+      const prismaCandidatesMap = new Map(prismaCandidates.map(pc => [pc.id, pc as PrismaCandidateModel])); // Cast pc to PrismaCandidateModel if mock doesn't perfectly align
 
       // Merge Pinecone matches with Prisma data
       // The EnrichedCandidateData type is now used for what scoring functions expect.
@@ -264,6 +308,12 @@ Output: { "keywords": ["software engineer"], "location": "London", "skills": ["R
         // For this example, assume prismaData.skills is already string[] or null.
         // Assume prismaData.workExperience and prismaData.education are compatible with Prisma's generated types.
         // Assume prismaData.raw_resume_text exists.
+
+        // Decrypt fields before using them for scoring or returning
+        const decryptedPhone = prismaData.phone ? decrypt(prismaData.phone) : null;
+        const decryptedResumeText = prismaData.resumeText ? decrypt(prismaData.resumeText) : null;
+        const decryptedAddress = prismaData.address ? decrypt(prismaData.address) : null;
+
         let candidateSkills: string[] | null = null;
         if (Array.isArray(prismaData.skills)) {
             candidateSkills = prismaData.skills as string[];
@@ -285,16 +335,29 @@ Output: { "keywords": ["software engineer"], "location": "London", "skills": ["R
 
         return {
           id: prismaData.id,
-          name: prismaData.name ?? null, // Use ?? for nullish coalescing
+          name: prismaData.name ?? null,
           title: prismaData.title ?? null,
+          email: prismaData.email, // Email is not encrypted
+          phone: decryptedPhone,
+          address: decryptedAddress,
           skills: candidateSkills,
-          workExperience: (prismaData as any).workExperience ?? null, // Cast if not directly on PrismaCandidateModel or ensure it is
-          education: (prismaData as any).education ?? null,
-          raw_resume_text: (prismaData as any).raw_resume_text ?? null,
+          workExperience: prismaData.workExperience ?? null,
+          education: prismaData.education ?? null,
+          raw_resume_text: decryptedResumeText, // Use decrypted resume text for scoring
           source_url: prismaData.source_url ?? null,
           pinecone_score: match.score,
+          linkedinUrl: prismaData.linkedinUrl,
+          githubUrl: prismaData.githubUrl,
+          certifications: prismaData.certifications ?? null,
         };
       }).filter(Boolean) as EnrichedCandidateData[]; // Filter out nulls
+
+      // IMPORTANT: If caching is re-enabled, ensure that ENCRYPTED data is cached,
+      // or that the cache key includes a version/identifier that changes if encryption status changes.
+      // For this subtask, the cache logic is already complex, so we are focusing on decryption
+      // for direct API responses. Decrypting before caching would store plaintext in cache.
+      // Caching encrypted data and decrypting on retrieval from cache would be safer for cached PII.
+      // Current cache stores the final API response (which will now be decrypted).
 
       if (enrichedCandidates.length === 0) {
         if (operationTimedOut) throw new Error("Timeout before setting cache for no (enriched) results.");
@@ -341,12 +404,14 @@ Output: { "keywords": ["software engineer"], "location": "London", "skills": ["R
           // For now, they are not explicitly on EnrichedCandidateData, so they'd be undefined
           // and Zod validation for the response would fail if they are not optional/nullable in CandidateSchema.
           // The CandidateSchema in lib/schemas.ts HAS made them optional/nullable.
-          phone: (cand as any).phone ?? null,
-          address: (cand as any).address ?? null,
-          workExperience: (cand as any).workExperience ?? null,
-          education: (cand as any).education ?? null,
-          certifications: (cand as any).certifications ?? null,
-          raw_resume_text: (cand as any).raw_resume_text ?? null,
+
+          // Ensure decrypted values are passed to the final response object
+          phone: cand.phone, // Already decrypted in EnrichedCandidateData mapping
+          address: cand.address, // Already decrypted
+          workExperience: cand.workExperience ?? null,
+          education: cand.education ?? null,
+          certifications: cand.certifications ?? null,
+          raw_resume_text: cand.raw_resume_text, // Already decrypted
 
           match_score: parseFloat(weighted_score.toFixed(3)),
           skill_match: parseFloat(skill_match.toFixed(3)),
@@ -388,10 +453,42 @@ Output: { "keywords": ["software engineer"], "location": "London", "skills": ["R
     try {
         const result = await Promise.race([searchLogic(), timeoutPromise]);
         clearTimeout(timeoutId!); // Clear timeout once searchLogic resolves or rejects
+
+        // Log successful search
+        const session = await getServerSession(req, res, authOptions);
+        if (session?.user?.id) {
+          const auditDetails: z.infer<typeof CandidateSearchActionDetailsSchema> = {
+            query: query,
+            filtersApplied: null, // Placeholder, add actual filters if used
+            resultsCount: result.candidates?.length || 0,
+            weightsUsed: weights || { w_skill: 0.4, w_experience: 0.3, w_culture: 0.3 }
+          };
+          // Validate details before logging
+          const parsedAuditDetails = CandidateSearchActionDetailsSchema.safeParse(auditDetails);
+          if(parsedAuditDetails.success) {
+            await createAuditLog({
+              userId: session.user.id,
+              action: "CANDIDATE_SEARCH",
+              details: parsedAuditDetails.data,
+              // entity: "Query", // If you save queries and have a queryId
+              // entityId: queryRecord?.id
+            });
+          } else {
+            console.warn("Failed to validate search audit details:", parsedAuditDetails.error);
+            // Log with raw details if parsing failed, or handle error differently
+            await createAuditLog({
+              userId: session.user.id,
+              action: "CANDIDATE_SEARCH",
+              details: auditDetails
+            });
+          }
+        }
+
         // The result should already be validated by SearchApiResponseSchema within searchLogic or by cache check
         res.status(200).json(result);
     } catch (e:any) {
         clearTimeout(timeoutId!); // Ensure timeout is cleared on error too
+        // Log failed search attempt? Could be noisy. For now, only logging success.
         if (operationTimedOut) { // Check if the error was due to our timeoutPromise
             return res.status(504).json({ error: e.message || `Search operation timed out after ${API_OPERATION_TIMEOUT_MS / 1000}s` });
         }
@@ -425,4 +522,29 @@ Output: { "keywords": ["software engineer"], "location": "London", "skills": ["R
     // So, we should not send parsedQuery here.
     res.status(statusCode).json(ErrorResponseSchema.parse({ error: errorMessage }));
   }
+}
+
+// Renaming original handler to apply wrappers
+const searchHandlerLogic = handler;
+
+// Apply rate limiting first, then role protection
+const protectedSearchHandler = withRoleProtection(searchHandlerLogic, [Role.ADMIN, Role.RECRUITER]);
+
+export default async function finalSearchHandler(req: NextApiRequest, res: NextApiResponse) {
+  // Apply rate limiter first
+  try {
+    await runMiddleware(req, res, searchApiRateLimiter);
+  } catch (error: any) {
+    if (error.message.includes("Too Many Requests")) {
+      console.warn(`Rate limit exceeded for search API from IP: ${req.ip || req.headers['x-forwarded-for']}`);
+    } else {
+      console.error("Error in search rate limiting middleware (outer handler):", error);
+    }
+    // Rate limiter already sent response
+    return;
+  }
+
+  // If rate limiter passes, proceed to the role-protected handler
+  // The role-protected handler will also handle the method check internally now.
+  return protectedSearchHandler(req, res);
 }

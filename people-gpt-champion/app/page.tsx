@@ -3,6 +3,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import OutreachModal from '@/components/OutreachModal';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
+import { useSession } from "next-auth/react"; // Import useSession
+import OutreachModal from '@/components/OutreachModal'; // Added import
+import { Role } from '@prisma/client'; // Import Role enum
 
 // New Component Imports
 import SearchInput from '../components/SearchInput';
@@ -124,6 +127,9 @@ const ProgressBar = ({ score, tooltipText, barColor = '#4CAF50', label }: { scor
 
 
 export default function HomePage() {
+  const { data: session, status } = useSession(); // Use the hook
+  const userRole = session?.user?.role; // Get role from session
+
   const [query, setQuery] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [weights, setWeights] = useState({
@@ -406,6 +412,122 @@ const calculatePercentileRanks = (candidates: Candidate[]): Candidate[] => {
           <h1 className="text-2xl sm:text-3xl font-bold text-neutral-800 dark:text-neutral-100">Candidate Search & Outreach</h1>
           <ThemeSwitcher />
         </div>
+    <div style={{ fontFamily: 'sans-serif', maxWidth: '900px', margin: '0 auto', padding: '20px' }}>
+      {status === "loading" && <p>Loading session...</p>}
+      {session && (
+        <div style={{ padding: "10px", marginBottom: "10px", backgroundColor: "#e6f7ff", border: "1px solid #91d5ff", borderRadius: "4px" }}>
+          <p>Welcome, {session.user?.name || session.user?.email}! (Role: {userRole || 'Unknown'})</p>
+        </div>
+      )}
+
+      {/* Conditional UI for ADMIN role */}
+      {userRole === Role.ADMIN && (
+        <div style={{ padding: "10px", marginBottom: "20px", backgroundColor: "#fffbe6", border: "1px solid #ffe58f", borderRadius: "4px" }}>
+          <h2>Admin Controls</h2>
+          <p>Special administrative actions can be placed here.</p>
+          <button style={{padding: "8px 12px", backgroundColor: "orange", color: "white", border: "none", borderRadius: "4px"}}>Admin Action Button</button>
+        </div>
+      )}
+
+      <h1>Candidate Search</h1>
+
+      {/* Example of disabling a button based on role */}
+      <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'center' }}>
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Enter search query"
+          style={{ width: 'calc(70% - 5px)', padding: '10px', marginRight: '10px', fontSize: '16px', border: '1px solid #ccc', borderRadius: '4px' }}
+        />
+        <button
+          onClick={handleSearch}
+          style={{ padding: '10px 15px', fontSize: '16px', cursor: 'pointer', border: 'none', backgroundColor: '#007bff', color: 'white', borderRadius: '4px' }}
+        >
+          Search
+        </button>
+        <button
+          onClick={() => {
+            if (selectedCandidateIds.length > 0) {
+              setIsOutreachModalOpen(true);
+            }
+          }}
+          // Disable outreach button for RECRUITERs, enable for ADMIN and USER (example logic)
+          disabled={selectedCandidateIds.length === 0 || userRole === Role.RECRUITER}
+          style={{
+            padding: '10px 15px',
+            fontSize: '16px',
+            cursor: (selectedCandidateIds.length === 0 || userRole === Role.RECRUITER) ? 'not-allowed' : 'pointer',
+            border: 'none',
+            backgroundColor: (selectedCandidateIds.length === 0 || userRole === Role.RECRUITER) ? '#ccc' : '#28a745',
+            color: 'white',
+            borderRadius: '4px',
+            marginLeft: '10px'
+          }}
+        >
+          Initiate Outreach ({selectedCandidateIds.length}) {userRole === Role.RECRUITER ? "(Disabled for Recruiters)" : ""}
+        </button>
+      </div>
+
+      {/* Example of hiding an element for non-ADMIN users */}
+      {userRole === Role.ADMIN && (
+        <div style={{ marginBottom: '20px', padding: '15px', border: '1px solid #ddd', borderRadius: '4px', backgroundColor: '#f0f0f0' }}>
+            <p>This entire section is visible only to ADMIN users.</p>
+        </div>
+      )}
+
+      {/* New RBAC UI Examples */}
+      <div style={{marginTop: "20px", marginBottom: "20px", padding: "15px", border: "1px solid #ccc", borderRadius: "4px"}}>
+        <h2 style={{marginTop: 0}}>Role-Specific Features</h2>
+
+        {/* Example 2: Recruiter/Admin Feature Button */}
+        {(userRole === Role.ADMIN || userRole === Role.RECRUITER) && (
+          <button style={{padding: "10px 15px", marginRight:"10px", backgroundColor: "teal", color: "white", border: "none", borderRadius: "4px"}}>
+            Access Candidate Database
+          </button>
+        )}
+
+        {/* Example 3: Feature Disabled for Basic User */}
+        <button
+          style={{
+            padding: "10px 15px",
+            backgroundColor: (userRole === Role.USER || !session) ? "#aaa" : "purple",
+            color: "white",
+            border: "none",
+            borderRadius: "4px",
+            cursor: (userRole === Role.USER || !session) ? "not-allowed" : "pointer"
+          }}
+          disabled={userRole === Role.USER || !session}
+          title={(userRole === Role.USER || !session) ? "This action requires Recruiter or Admin privileges." : "Perform an advanced action."}
+        >
+          Perform Advanced Action {(userRole === Role.USER || !session) ? "(Disabled)" : ""}
+        </button>
+      </div>
+
+
+      <div style={{ marginBottom: '20px', padding: '15px', border: '1px solid #ddd', borderRadius: '4px', backgroundColor: '#f9f9f9' }}>
+        <h3 style={{marginTop: 0}}>Adjust Scoring Weights (Sum to 1)</h3>
+        {(['w_skill', 'w_experience', 'w_culture'] as (keyof typeof weights)[]).map(weightKey => (
+          <div key={weightKey} style={{marginBottom: '10px'}}>
+            <label htmlFor={weightKey} style={{display: 'block', marginBottom: '3px', fontSize: '14px', color: '#333'}}>
+              {weightKey.replace('w_', '').replace('_', ' ')}: {weights[weightKey].toFixed(2)}
+            </label>
+            <input
+              type="range"
+              id={weightKey}
+              min="0"
+              max="1"
+              step="0.01"
+              value={weights[weightKey]}
+              onChange={(e) => handleWeightChange(weightKey, parseFloat(e.target.value))}
+              style={{ width: '100%' }}
+            />
+          </div>
+        ))}
+      </div>
+
+      {isLoading && <p style={{textAlign: 'center', fontSize: '18px'}}>Loading...</p>}
+      {apiError && <p style={{ color: 'red', textAlign: 'center', border: '1px solid red', padding: '10px', borderRadius: '4px' }}>Error: {apiError}</p>}
 
         {/* Sentry Test Area */}
         <div className="my-4 p-4 border border-dashed border-red-500 dark:border-red-700 rounded-md bg-white dark:bg-neutral-800">

@@ -1,7 +1,21 @@
 // people-gpt-champion/pages/api/send-slack-message.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { SendSlackMessageRequestBodySchema } from '../../lib/schemas';
+import { Role } from '@prisma/client'; // Import Role
+import {
+    SendSlackMessageRequestBodySchema,
+    SendSlackMessageSuccessResponseSchema, // For typing success response
+    IApiErrorResponse,                     // For typing error response
+    OutreachSentDetailsSchema             // For audit log details
+} from '../../lib/schemas';
 import { sendSlackMessage } from '../../lib/slack';
+import { withRoleProtection } from '../../lib/authUtils';
+import { handleZodError, sendErrorResponse, sendSuccessResponse } from '../../lib/apiUtils';
+import { createAuditLog } from '../../lib/auditLog'; // Import createAuditLog
+import { getServerSession } from 'next-auth/next';   // For getting userId
+import { authOptions } from '../auth/[...nextauth]'; // For getting userId
+import { ZodError } from 'zod';
+import { z } from 'zod'; // For inferring type for audit log details
+import { rateLimiter, runMiddleware } from '../../lib/rateLimit'; // Import rate limiting
 
 /**
  * @swagger
@@ -60,46 +74,92 @@ import { sendSlackMessage } from '../../lib/slack';
  *          description: The Slack message timestamp (ts).
  *          example: "1605896877.000800"
  */
-export default async function handler(
+async function sendSlackMessageHandler(
   req: NextApiRequest,
-  res: NextApiResponse
+  res: NextApiResponse // Typed as <SendSlackMessageSuccessResponseSchema (inferred) | IApiErrorResponse>
 ) {
+  // Method and role checks handled by wrappers
+
+  try {
+    const session = await getServerSession(req, res, authOptions); // Get session for audit logging
+    const currentUserId = session?.user?.id;
+
+    // Validate request body
+    const validationResult = SendSlackMessageRequestBodySchema.safeParse(req.body);
+    if (!validationResult.success) {
+      throw validationResult.error; // Caught by ZodError handler
+    }
+    const { userId: recipientSlackId, message, candidateId } = validationResult.data;
+
+    if (candidateId) {
+      console.log(`Slack message initiated. Associated with candidateId: ${candidateId}`);
+      // Note: No database persistence for Slack messages in this current implementation.
+    }
+
+    const messageTimestamp = await sendSlackMessage(recipientSlackId, message);
+
+    // Audit log the successful Slack message send
+    if (currentUserId) {
+      const auditDetails: z.infer<typeof OutreachSentDetailsSchema> = {
+        channel: "slack",
+        recipient: recipientSlackId, // Slack User ID
+        candidateId: candidateId || null,
+        messageId: messageTimestamp,
+      };
+      const parsedAuditDetails = OutreachSentDetailsSchema.safeParse(auditDetails);
+      if (parsedAuditDetails.success) {
+        await createAuditLog({
+          userId: currentUserId,
+          action: "OUTREACH_SENT",
+          entity: "SlackMessage",
+          entityId: messageTimestamp, // Using Slack message_ts as entityId
+          details: parsedAuditDetails.data,
+        });
+      } else {
+        console.warn("Failed to validate OUTREACH_SENT (slack) audit details:", parsedAuditDetails.error);
+      }
+    }
+
+    return sendSuccessResponse(res, 200, { success: true, messageId: messageTimestamp });
+
+  } catch (error: any) {
+    if (error instanceof ZodError) {
+      return handleZodError(error, res);
+    }
+    console.error(`Error in /api/send-slack-message for user ${req.body?.userId}:`, error);
+    const errorMessage = error.message || 'An unexpected error occurred while sending the Slack message.';
+    if (errorMessage.includes('SLACK_BOT_TOKEN') || errorMessage.includes('SLACK_SIGNING_SECRET')) {
+      return sendErrorResponse(res, 500, `Server configuration error: ${errorMessage}`);
+    }
+    return sendErrorResponse(res, 500, `Failed to send Slack message: ${errorMessage}`);
+  }
+}
+
+
+const sendSlackMessageRateLimiter = rateLimiter({
+  windowSeconds: 5 * 60, // 5 minutes
+  maxRequests: 10,
+  keyPrefix: 'send_slack_message',
+});
+
+const protectedSendSlackMessageHandler = withRoleProtection(sendSlackMessageHandler, [Role.ADMIN, Role.RECRUITER]);
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
-    return res.status(405).json({ success: false, error: `Method ${req.method} Not Allowed` });
-  }
-
-  // Validate request body
-  const validationResult = SendSlackMessageRequestBodySchema.safeParse(req.body);
-  if (!validationResult.success) {
-    return res.status(400).json({ success: false, error: validationResult.error.flatten() });
-  }
-
-  const { userId, message, candidateId } = validationResult.data; // Added candidateId
-
-  if (candidateId) {
-    console.log(`Slack message initiated. Associated with candidateId: ${candidateId}`);
-    // Note: No database persistence for Slack messages in this current implementation.
-    // If a SlackOutreach table existed, candidateId would be stored there.
+    return sendErrorResponse(res, 405, `Method ${req.method} Not Allowed`);
   }
 
   try {
-    // The SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET are expected to be set as environment variables
-    // and are used internally by getSlackApp() in lib/slack.ts
-    // If they are not set, sendSlackMessage will throw an error which is caught below.
-    const messageTimestamp = await sendSlackMessage(userId, message);
-
-    // If sendSlackMessage was successful, it returns the message timestamp (ts)
-    return res.status(200).json({ success: true, messageId: messageTimestamp });
-
+    await runMiddleware(req, res, sendSlackMessageRateLimiter);
   } catch (error: any) {
-    console.error(`Error in /api/send-slack-message for user ${userId}:`, error);
-    const errorMessage = error.message || 'An unexpected error occurred while sending the Slack message.';
-    // Check if the error is due to missing environment variables from lib/slack.ts
-    if (errorMessage.includes('SLACK_BOT_TOKEN environment variable is not set') ||
-        errorMessage.includes('SLACK_SIGNING_SECRET environment variable is not set')) {
-      return res.status(500).json({ success: false, error: `Server configuration error: ${errorMessage}` });
+    if (error.message.includes("Too Many Requests")) {
+      console.warn(`Rate limit exceeded for send-slack-message from IP: ${req.ip || req.headers['x-forwarded-for']}`);
+    } else {
+      console.error("Error in send-slack-message rate limiting middleware:", error);
     }
-    return res.status(500).json({ success: false, error: `Failed to send Slack message: ${errorMessage}` });
+    return;
   }
+
+  return protectedSendSlackMessageHandler(req, res);
 }
