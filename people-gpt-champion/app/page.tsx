@@ -201,9 +201,70 @@ const calculatePercentileRanks = (candidates: Candidate[]): Candidate[] => {
   ]);
   // selectedCandidateIds will be used for the OutreachModal as selectedIdsForModal logic (already exists)
 
+  // State for resume upload
+  const [selectedResumes, setSelectedResumes] = useState<FileList | null>(null);
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadedCandidateIds, setUploadedCandidateIds] = useState<string[]>([]);
+
   const throwTestError = () => {
     setTestErrorThrown(true); // Optional: give some UI feedback
     throw new Error("Sentry Test Error - Client Side - " + new Date().toISOString());
+  };
+
+  const handleResumeFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files) {
+      setSelectedResumes(event.target.files);
+      setUploadStatus(null); // Reset status on new file selection
+      setUploadError(null);
+      setUploadedCandidateIds([]);
+    }
+  };
+
+  const handleResumeUpload = async () => {
+    if (!selectedResumes || selectedResumes.length === 0) {
+      setUploadError("Please select one or more resume files to upload.");
+      return;
+    }
+
+    setUploadStatus("Uploading...");
+    setUploadError(null);
+    setUploadedCandidateIds([]);
+
+    const formData = new FormData();
+    for (let i = 0; i < selectedResumes.length; i++) {
+      formData.append("resumes", selectedResumes[i]);
+    }
+
+    try {
+      const response = await fetch("/api/parse-resume", {
+        method: "POST",
+        body: formData,
+        // Headers are not strictly necessary for FormData, browser sets it
+        // headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || `API Error: ${response.statusText}`);
+      }
+
+      if (result.success && result.candidate_ids) {
+        setUploadStatus(`Successfully uploaded and parsed ${result.candidate_ids.length} resume(s).`);
+        setUploadedCandidateIds(result.candidate_ids);
+        setSelectedResumes(null); // Clear selection after successful upload
+        // Optionally, trigger a refresh of candidate lists or other actions
+      } else if (result.message) { // Handle partial success or informational messages
+        setUploadStatus(result.message);
+      } else {
+        // Fallback for unexpected successful response structure
+        setUploadStatus("Upload completed, but response format was unexpected.");
+      }
+    } catch (err: any) {
+      setUploadError(err.message || "An unknown error occurred during upload.");
+      setUploadStatus(null);
+    }
   };
 
   const handleSendMessage = (text: string) => {
@@ -389,8 +450,16 @@ const calculatePercentileRanks = (candidates: Candidate[]): Candidate[] => {
 
     setWeights(newWeights);
 
-    if (searchTerm) {
-      debouncedFetchCandidates(searchTerm, newWeights);
+    // If there's an active search query or applied filters for the new search UI,
+    // re-trigger the search with the new weights.
+    // executeNewSearch will use the 'weights' state which was just updated.
+    if (activeSearchQuery || Object.keys(appliedFilters).length > 0) {
+      debouncedExecuteNewSearch(activeSearchQuery, appliedFilters);
+    } else {
+      // Optional: If you want to clear results when weights change and there's no active query/filter
+      // setNewSearchResults([]);
+      // Or, do nothing, and the weights will apply to the next search.
+      // For now, let's do nothing if no active search/filter, to avoid clearing results unnecessarily.
     }
   };
 
@@ -425,7 +494,38 @@ const calculatePercentileRanks = (candidates: Candidate[]): Candidate[] => {
         <div style={{ padding: "10px", marginBottom: "20px", backgroundColor: "#fffbe6", border: "1px solid #ffe58f", borderRadius: "4px" }}>
           <h2>Admin Controls</h2>
           <p>Special administrative actions can be placed here.</p>
-          <button style={{padding: "8px 12px", backgroundColor: "orange", color: "white", border: "none", borderRadius: "4px"}}>Admin Action Button</button>
+          <button style={{padding: "8px 12px", marginRight: "10px", backgroundColor: "orange", color: "white", border: "none", borderRadius: "4px"}}>Admin Action Button</button>
+
+          {/* Resume Upload Section - Visible only to ADMIN */}
+          <div style={{ marginTop: "15px", paddingTop: "15px", borderTop: "1px solid #ffe58f" }}>
+            <h3 style={{ marginTop: 0, marginBottom: "10px" }}>Upload Resumes</h3>
+            <input
+              type="file"
+              multiple
+              onChange={handleResumeFileChange}
+              accept=".pdf,.doc,.docx,.txt" // Specify acceptable file types
+              style={{ display: 'block', marginBottom: '10px' }}
+            />
+            <button
+              onClick={handleResumeUpload}
+              disabled={!selectedResumes || selectedResumes.length === 0 || uploadStatus === "Uploading..."}
+              style={{
+                padding: "10px 15px",
+                backgroundColor: (uploadStatus === "Uploading..." || !selectedResumes || selectedResumes.length === 0) ? "#ccc" : "#007bff",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: (uploadStatus === "Uploading..." || !selectedResumes || selectedResumes.length === 0) ? "not-allowed" : "pointer"
+              }}
+            >
+              {uploadStatus === "Uploading..." ? "Uploading..." : "Upload Selected Resumes"}
+            </button>
+            {uploadStatus && !uploadError && <p style={{ color: 'green', marginTop: '10px' }}>{uploadStatus}</p>}
+            {uploadedCandidateIds.length > 0 && (
+              <p style={{ marginTop: '5px' }}>Candidate IDs: {uploadedCandidateIds.join(', ')}</p>
+            )}
+            {uploadError && <p style={{ color: 'red', marginTop: '10px' }}>Error: {uploadError}</p>}
+          </div>
         </div>
       )}
 
