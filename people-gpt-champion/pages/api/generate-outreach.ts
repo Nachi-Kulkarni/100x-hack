@@ -16,6 +16,7 @@ import { Role, PrismaClient, Prisma } from '@prisma/client'; // PrismaClient alr
 import { chatCompletionBreaker } from '../../lib/openai';
 import { handleZodError, sendErrorResponse, sendSuccessResponse } from '../../lib/apiUtils'; // Standard helpers
 import { ZodError } from 'zod'; // To catch Zod errors
+import { redactCandidatePII } from '../../lib/piiRedactor'; // Added import
 
 const prisma = new PrismaClient();
 
@@ -225,6 +226,14 @@ async function generateOutreachHandler(
         if (!resolvedOutreachProfile) {
           return sendErrorResponse(res, 404, 'Candidate not found for the provided candidateId.');
         }
+    }
+
+    // Redact PII from the profile before using it in any prompts
+    if (resolvedOutreachProfile) {
+      // IOutreachProfileResponse has 'id', 'email', 'phone' which redactCandidatePII can handle.
+      // Using 'as any' for broader compatibility if the exact shape isn't a perfect match for CandidatePIIData,
+      // but the core PII fields will be redacted.
+      resolvedOutreachProfile = redactCandidatePII(resolvedOutreachProfile as any);
     }
 
     let systemPrompt = "You are an expert at crafting outreach messages. Follow the user's instructions carefully regarding channel, tone, and variables. Output *only* valid JSON that strictly adheres to the requested format.";
