@@ -54,6 +54,21 @@ export interface Candidate {
 
   source_url?: string | null;
   pinecone_score?: number; // raw score from vector search if applicable
+import { Briefcase, Mail, Phone, Star, UserCircle, ExternalLink } from 'lucide-react'; // Using existing icons, added ExternalLink
+
+// Define a type for the candidate data
+// Ideally, this would import the main Candidate type from lib/schemas if it's client-safe
+// For now, extending with necessary fields.
+export interface Candidate {
+  id: string;
+  name: string;
+  title?: string;
+  email?: string;
+  phone?: string;
+  skills?: string[];
+  summary?: string; // This seems to be a short description, not all structured fields
+  source_url?: string | null; // Added for source citation
+  // Add other relevant fields as needed from the main Candidate type
 }
 
 
@@ -160,6 +175,21 @@ const CandidateCard: React.FC<CandidateCardProps> = ({ candidate, onViewDetails 
             {candidate.summary}
           </p>
         )}
+        {candidate.source_url && candidate.source_url !== '#' && (
+          <div className="flex items-center text-sm text-neutral-600 dark:text-neutral-300">
+            <ExternalLink size={14} className="mr-2 text-neutral-500 dark:text-neutral-400" />
+            <a
+              href={candidate.source_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-blue-600 dark:hover:text-blue-400 truncate"
+              title={candidate.source_url} // Show full URL on hover
+            >
+              View Source Profile
+            </a>
+          </div>
+        )}
+      </div>
 
         <div className="space-y-2 mb-4">
           {candidate.email && (

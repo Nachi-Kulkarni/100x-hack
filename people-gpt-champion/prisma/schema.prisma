@@ -29,6 +29,8 @@ model Candidate {
   rankings  Ranking[]
   outreaches OutreachLog[]
   emailOutreaches EmailOutreach[] // Relation to specific A/B test email outreaches
+  gender    String?  // Added field for gender
+  ethnicity String?  // Added field for ethnicity
 }
 
 model Query {

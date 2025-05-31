@@ -17,6 +17,7 @@ import { decrypt } from '../../lib/encryption'; // Import decrypt
 import { rateLimiter, runMiddleware } from '../../lib/rateLimit'; // Import rate limiting utilities
 import { withRoleProtection } from '../../lib/authUtils'; // Import withRoleProtection
 import { Role } from '@prisma/client'; // Import Role
+import { redactCandidatePII } from '../../lib/piiRedactor'; // Added import
 
 // Initialize Prisma Client based on LaunchDarkly flag
 // This promise will resolve to the appropriate Prisma client (real or mock)
@@ -103,12 +104,39 @@ interface EnrichedCandidateData {
   linkedinUrl?: string | null;
   githubUrl?: string | null;
   certifications?: PrismaCandidateModel['certifications'] | null;
+  // Fields for demographic data (added in a previous subtask to Prisma model)
+  gender?: string | null;
+  ethnicity?: string | null;
 }
 
 
 type Data = z.infer<typeof SearchApiResponseSchema>; // Use Zod schema for response type
 
 const API_OPERATION_TIMEOUT_MS = 20000; // 20 seconds
+
+// Placeholder function for demographic parity adjustments
+/**
+ * Applies adjustments to candidate scores to promote demographic parity.
+ * NOTE: This is a placeholder. A real implementation requires:
+ * 1. Actual demographic data for candidates.
+ * 2. Defined fairness metrics and targets (e.g., equal selection rates across groups).
+ * 3. Careful consideration of ethical implications and potential biases.
+ * This function currently returns candidates without modification.
+ * @param candidates Array of scored candidate objects.
+ * @returns Array of candidate objects, potentially with adjusted scores.
+ */
+const applyDemographicParityAdjustment = (candidates: Candidate[]): Candidate[] => {
+  // TODO: Implement demographic parity logic when data and clear requirements are available.
+  // Example steps for a real implementation:
+  // 1. Identify demographic groups present in the candidate list.
+  // 2. Calculate current selection rates/score distributions for each group.
+  // 3. Based on defined fairness goals (e.g., demographic parity in top X% of candidates),
+  //    apply adjustments. This could be re-weighting, score boosting/capping for
+  //    underrepresented/overrepresented groups, or more complex methods like adversarial debiasing.
+  // 4. Ensure adjustments are transparent and auditable.
+  console.warn('applyDemographicParityAdjustment is a placeholder and does not currently modify scores.');
+  return candidates;
+};
 
 // Refined scoring functions
 const calculateSkillMatch = (candidate: EnrichedCandidateData, parsedQuery: QueryParameters): number => {
@@ -353,6 +381,9 @@ Output: { "keywords": ["software engineer"], "location": "London", "skills": ["R
           linkedinUrl: prismaData.linkedinUrl,
           githubUrl: prismaData.githubUrl,
           certifications: prismaData.certifications ?? null,
+          // Add demographic fields from prismaData
+          gender: prismaData.gender ?? null,
+          ethnicity: prismaData.ethnicity ?? null,
         };
       }).filter(Boolean) as EnrichedCandidateData[]; // Filter out nulls
 
@@ -490,15 +521,30 @@ Output: { "keywords": ["software engineer"], "location": "London", "skills": ["R
           reasoning: reasoning,
           source_url: cand.source_url ?? '#',
           pinecone_score: cand.pinecone_score,
+          // Pass through demographic data
+          gender: cand.gender,
+          ethnicity: cand.ethnicity,
         };
       });
 
       // Sort candidates by the new weighted match_score
       scoredCandidates.sort((a, b) => b.match_score - a.match_score);
 
+      // Apply demographic parity adjustments (placeholder)
+      // This step is conceptual until demographic data and fairness metrics are defined.
+      const adjustedScoredCandidates = applyDemographicParityAdjustment(scoredCandidates);
+
+      // Redact PII from candidates before sending response and caching
+      const redactedScoredCandidates = adjustedScoredCandidates.map(candidate =>
+        // Ensure the candidate object structure is compatible with CandidatePIIData
+        // The `as any` here is a temporary measure if types are not perfectly aligned.
+        // Ideally, ensure `Candidate` type from Zod schema is compatible with `CandidatePIIData`.
+        redactCandidatePII(candidate as any)
+      );
+
       if (operationTimedOut) throw new Error("Timeout before setting final cache.");
-      const resultData: Data = { candidates: scoredCandidates, parsedQuery };
-      await setCache(cacheKey, resultData);
+      const resultData: Data = { candidates: redactedScoredCandidates, parsedQuery };
+      await setCache(cacheKey, resultData); // Cache the redacted data
 
       // Validate successful response before sending
       const responseValidation = SearchApiResponseSchema.safeParse(resultData);

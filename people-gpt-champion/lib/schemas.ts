@@ -73,6 +73,10 @@ export const CandidateSchema = z.object({
   // Source & Vector DB score
   source_url: z.string().url().or(z.literal('#')).optional().nullable(),
   pinecone_score: z.number().optional(), // Pinecone's original score
+
+  // Demographic data
+  gender: z.string().optional().nullable(),
+  ethnicity: z.string().optional().nullable(),
 });
 
 // Schema for the successful API response
