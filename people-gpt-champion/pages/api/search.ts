@@ -225,11 +225,15 @@ export default async function handler(
     });
   }
 
-  // Use validated data, including weights
-  const { query, weights } = validationResult.data;
+  // Use validated data, including weights and filters
+  const { query, weights, filters: requestFilters } = validationResult.data;
   const { w_skill, w_experience, w_culture } = weights || { w_skill: 0.4, w_experience: 0.3, w_culture: 0.3 }; // Default weights
 
-  const cacheKey = `search-v4-hybrid:${crypto.createHash('md5').update(query.toLowerCase() + JSON.stringify(weights || {})).digest('hex')}`; // Include weights in cache key
+  // Include filters in cacheKey if they are present and not empty
+  const filtersCacheKeyPart = requestFilters && Object.keys(requestFilters).length > 0
+    ? JSON.stringify(requestFilters)
+    : '';
+  const cacheKey = `search-v5-hybrid-filtered:${crypto.createHash('md5').update(query.toLowerCase() + JSON.stringify(weights || {}) + filtersCacheKeyPart).digest('hex')}`;
 
   try {
     // 1. Check Cache
@@ -390,15 +394,75 @@ Output: { "keywords": ["software engineer"], "location": "London", "skills": ["R
       // Caching encrypted data and decrypting on retrieval from cache would be safer for cached PII.
       // Current cache stores the final API response (which will now be decrypted).
 
-      if (enrichedCandidates.length === 0) {
-        if (operationTimedOut) throw new Error("Timeout before setting cache for no (enriched) results.");
-        const noResultsData: Data = { candidates: [], parsedQuery, message: 'No enriched candidates found matching your query.' };
-        await setCache(cacheKey, noResultsData);
+      // Apply structured filters AFTER enriching candidates from Prisma but BEFORE scoring
+      let postProcessedCandidates = enrichedCandidates;
+      if (requestFilters && Object.keys(requestFilters).length > 0 && enrichedCandidates.length > 0) {
+        console.log("Applying structured filters:", requestFilters);
+        postProcessedCandidates = enrichedCandidates.filter(candidate => {
+          let passesAllFilters = true;
+
+          // Skills filter: candidate must have ALL specified skills (case-insensitive)
+          if (requestFilters.skills && Array.isArray(requestFilters.skills) && requestFilters.skills.length > 0) {
+            const candidateSkillsLower = (candidate.skills || []).map(s => s.toLowerCase());
+            const filterSkillsLower = requestFilters.skills.map(s => String(s).toLowerCase()); // Ensure filter skills are strings
+            if (!filterSkillsLower.every(fs => candidateSkillsLower.includes(fs))) {
+              passesAllFilters = false;
+            }
+          }
+
+          // Experience filter (simplified keyword check in work experience text)
+          // This is a basic heuristic and not a robust calculation of total experience.
+          if (passesAllFilters && requestFilters.experience && typeof requestFilters.experience === 'string' && requestFilters.experience !== '0') {
+            const experienceQuery = String(requestFilters.experience).toLowerCase(); // e.g., "3" or "5+"
+            let experienceKeywordFound = false;
+            if (candidate.workExperience && Array.isArray(candidate.workExperience)) {
+              const yearNumberStr = experienceQuery.replace(/\D/g, ''); // Extract numbers, e.g., "5" from "5+"
+
+              for (const job of candidate.workExperience) {
+                const jobText = `${job.title || ''} ${job.description || ''}`.toLowerCase();
+                // Check for patterns like "3 years", "5+ years experience"
+                if (jobText.includes(`${yearNumberStr} year`) || jobText.includes(`${yearNumberStr}+ year`)) {
+                  experienceKeywordFound = true;
+                  break;
+                }
+              }
+            }
+            // If the filter is for a specific number of years (e.g., "3", "5+") and no such keyword is spotted,
+            // we consider the candidate as not matching this simplified filter.
+            if (!experienceKeywordFound) {
+               passesAllFilters = false;
+            }
+          }
+
+          // Availability and Remote filters:
+          // These are NOT implemented as there are no corresponding fields in the Candidate model (schema.prisma).
+          // If `candidate.availabilityStatus` or `candidate.isRemote` existed, the logic would be:
+          // if (passesAllFilters && requestFilters.availability && typeof requestFilters.availability === 'string') {
+          //   if (String(candidate.availabilityStatus).toLowerCase() !== String(requestFilters.availability).toLowerCase()) {
+          //     passesAllFilters = false;
+          //   }
+          // }
+          // if (passesAllFilters && typeof requestFilters.remote === 'boolean') {
+          //   if (candidate.isRemote !== requestFilters.remote) { // Assuming isRemote is boolean on candidate
+          //     passesAllFilters = false;
+          //   }
+          // }
+
+          return passesAllFilters;
+        });
+        console.log(`Candidates before filtering: ${enrichedCandidates.length}, After filtering: ${postProcessedCandidates.length}`);
+      }
+
+
+      if (postProcessedCandidates.length === 0) {
+        if (operationTimedOut) throw new Error("Timeout before setting cache for no (filtered) results.");
+        const noResultsData: Data = { candidates: [], parsedQuery, message: 'No candidates found after applying filters.' };
+        await setCache(cacheKey, noResultsData); // Ensure this uses the filter-aware cacheKey
         return noResultsData;
       }
 
-      // 4. New Multi-Factor Scoring (operates on enrichedCandidates)
-      const scoredCandidates: Candidate[] = enrichedCandidates.map(cand => {
+      // 4. New Multi-Factor Scoring (operates on postProcessedCandidates)
+      const scoredCandidates: Candidate[] = postProcessedCandidates.map(cand => {
         // Cast `cand` to `EnrichedCandidateData` if necessary, though it should already conform
         const candidateDataForScoring: EnrichedCandidateData = cand;
 
@@ -505,7 +569,7 @@ Output: { "keywords": ["software engineer"], "location": "London", "skills": ["R
         if (session?.user?.id) {
           const auditDetails: z.infer<typeof CandidateSearchActionDetailsSchema> = {
             query: query,
-            filtersApplied: null, // Placeholder, add actual filters if used
+            filtersApplied: requestFilters && Object.keys(requestFilters).length > 0 ? requestFilters : null, // Populate with actual filters used
             resultsCount: result.candidates?.length || 0,
             weightsUsed: weights || { w_skill: 0.4, w_experience: 0.3, w_culture: 0.3 }
           };

@@ -79,17 +79,13 @@ async function outreachProfileHandler(
   req: NextApiRequest,
   res: NextApiResponse<IOutreachProfileResponse | IApiErrorResponse> // Use specific types
 ) {
-  // Method check already handled by withRoleProtection or done before this handler normally
-  // if (req.method !== 'GET') {
-  //   res.setHeader('Allow', ['GET']);
-  //   return sendErrorResponse(res, 405, `Method ${req.method} Not Allowed`);
-  // }
-
-  // Session and role check is handled by withRoleProtection
-
-  try {
+  // Explicit method check for GET
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', ['GET']);
     return sendErrorResponse(res, 405, `Method ${req.method} Not Allowed`);
   }
+
+  // Session and role check is assumed to be handled by withRoleProtection
 
   try {
     // Validate path parameter
