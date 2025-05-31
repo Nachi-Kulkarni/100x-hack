@@ -1,13 +1,18 @@
 // people-gpt-champion/pages/api/candidate/[id]/outreach-profile.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { PrismaClient, Prisma } from '@prisma/client';
-import { OutreachProfileResponseSchema } from '../../../lib/schemas'; // Zod schema for response validation
-import { z } from 'zod';
+import {
+  OutreachProfileResponseSchema,
+  IOutreachProfileResponse, // Import type for response
+  CandidateIdParamSchema,   // Import schema for path param
+  IApiErrorResponse         // Import type for error response
+} from '../../../lib/schemas';
+import { handleZodError, sendErrorResponse, sendSuccessResponse } from '../../../lib/apiUtils';
+import { withRoleProtection } from '../../../../lib/authUtils'; // Import withRoleProtection
+import { Role } from '@prisma/client'; // Import Role
+import { ZodError } from 'zod';
 
 const prisma = new PrismaClient();
-
-// Helper schema for CUID validation
-const CuidSchema = z.string().cuid({ message: "Invalid Candidate ID format." });
 
 // Define types for JSON fields if they are consistently structured
 // These are examples based on common resume parsing structures. Adjust as needed.
@@ -70,22 +75,30 @@ interface ResumeEducation {
  *         experienceSummary: { type: "string", nullable: true }
  *         educationSummary: { type: "string", nullable: true }
  */
-export default async function handler(
+async function outreachProfileHandler(
   req: NextApiRequest,
-  res: NextApiResponse
+  res: NextApiResponse<IOutreachProfileResponse | IApiErrorResponse> // Use specific types
 ) {
-  if (req.method !== 'GET') {
-    res.setHeader('Allow', ['GET']);
-    return res.status(405).json({ success: false, error: `Method ${req.method} Not Allowed` });
-  }
+  // Method check already handled by withRoleProtection or done before this handler normally
+  // if (req.method !== 'GET') {
+  //   res.setHeader('Allow', ['GET']);
+  //   return sendErrorResponse(res, 405, `Method ${req.method} Not Allowed`);
+  // }
 
-  const candidateIdValidation = CuidSchema.safeParse(req.query.id);
-  if (!candidateIdValidation.success) {
-    return res.status(400).json({ success: false, error: "Invalid Candidate ID format.", details: candidateIdValidation.error.flatten() });
-  }
-  const candidateId = candidateIdValidation.data;
+  // Session and role check is handled by withRoleProtection
 
   try {
+    return sendErrorResponse(res, 405, `Method ${req.method} Not Allowed`);
+  }
+
+  try {
+    // Validate path parameter
+    const idValidationResult = CandidateIdParamSchema.safeParse(req.query);
+    if (!idValidationResult.success) {
+      throw idValidationResult.error; // Caught by ZodError handler
+    }
+    const { id: candidateId } = idValidationResult.data;
+
     const candidate = await prisma.candidate.findUnique({
       where: { id: candidateId },
       // No explicit includes for related models like CandidateProfile, CandidateSkill etc.
@@ -93,7 +106,7 @@ export default async function handler(
     });
 
     if (!candidate) {
-      return res.status(404).json({ success: false, error: 'Candidate not found.' });
+      return sendErrorResponse(res, 404, 'Candidate not found.');
     }
 
     // Transform data (simple transformations for now)
@@ -154,21 +167,30 @@ export default async function handler(
     if (!responseValidation.success) {
       console.error("Server data validation error for outreach profile:", responseValidation.error.flatten());
       // This indicates an issue with data transformation or schema definition mismatch
-      return res.status(500).json({ success: false, error: "Error validating profile data on server." });
+      return sendErrorResponse(res, 500, "Error validating profile data on server.", responseValidation.error.flatten());
     }
 
-    return res.status(200).json(responseValidation.data);
+    return sendSuccessResponse(res, 200, responseValidation.data);
 
   } catch (error: any) {
-    console.error(`Error fetching outreach profile for candidate ${candidateId}:`, error);
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2023') {
-        // Error P2023: Inconsistent column data (e.g. invalid CUID format in DB, though less likely for ID)
-        return res.status(400).json({ success: false, error: "Invalid data format in database for candidate ID."});
+    if (error instanceof ZodError) {
+      return handleZodError(error, res);
     }
-    return res.status(500).json({ success: false, error: 'Failed to fetch outreach profile.', details: error.message });
+    // If candidateId was parsed, use it in the log message. Otherwise, use "unknown".
+    // const candidateIdForLog = typeof candidateId === 'string' ? candidateId : 'unknown';
+    // console.error(`Error fetching outreach profile for candidate ${candidateIdForLog}:`, error);
+    // Note: candidateId might not be defined here if error occurred during its parsing.
+    // The error message from ZodError will be more specific.
+    console.error(`Error fetching outreach profile:`, error);
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2023') {
+        return sendErrorResponse(res, 400, "Invalid data format in database for candidate ID.");
+    }
+    return sendErrorResponse(res, 500, 'Failed to fetch outreach profile.', error.message);
   } finally {
     await prisma.$disconnect().catch(async (e) => {
       console.error("Failed to disconnect Prisma client", e);
     });
   }
 }
+
+export default withRoleProtection(outreachProfileHandler, [Role.ADMIN, Role.RECRUITER]);

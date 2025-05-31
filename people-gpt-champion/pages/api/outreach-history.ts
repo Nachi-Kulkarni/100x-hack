@@ -1,7 +1,15 @@
 // people-gpt-champion/pages/api/outreach-history.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { PrismaClient } from '@prisma/client';
-import { OutreachHistoryQuerySchema, OutreachHistoryResponseSchema } from '../../lib/schemas'; // Zod schemas
+import { PrismaClient, Role } from '@prisma/client'; // Import Role
+import {
+    OutreachHistoryQuerySchema,
+    OutreachHistoryResponseSchema,
+    IOutreachHistoryResponse, // Import type for response
+    IApiErrorResponse         // Import type for error response
+} from '../../lib/schemas';
+import { handleZodError, sendErrorResponse, sendSuccessResponse } from '../../lib/apiUtils';
+import { withRoleProtection } from '../../lib/authUtils';
+import { ZodError } from 'zod';
 
 const prisma = new PrismaClient();
 
@@ -71,25 +79,21 @@ const prisma = new PrismaClient();
  *         pageSize: { type: "integer" }
  *         totalPages: { type: "integer" }
  */
-export default async function handler(
+async function outreachHistoryHandler(
   req: NextApiRequest,
-  res: NextApiResponse
+  res: NextApiResponse<IOutreachHistoryResponse | IApiErrorResponse>
 ) {
-  if (req.method !== 'GET') {
-    res.setHeader('Allow', ['GET']);
-    return res.status(405).json({ success: false, error: `Method ${req.method} Not Allowed` });
-  }
-
-  // Validate query parameters
-  const queryValidation = OutreachHistoryQuerySchema.safeParse(req.query);
-  if (!queryValidation.success) {
-    return res.status(400).json({ success: false, error: "Invalid query parameters", details: queryValidation.error.flatten() });
-  }
-
-  const { page, pageSize } = queryValidation.data;
-  const skip = (page - 1) * pageSize;
+  // Method and role checks handled by withRoleProtection wrapper
 
   try {
+    // Validate query parameters
+    const queryValidation = OutreachHistoryQuerySchema.safeParse(req.query);
+    if (!queryValidation.success) {
+      throw queryValidation.error; // Caught by ZodError handler
+    }
+    const { page, pageSize } = queryValidation.data;
+    const skip = (page - 1) * pageSize;
+
     const [outreaches, total] = await prisma.$transaction([
       prisma.emailOutreach.findMany({
         skip: skip,
@@ -133,13 +137,25 @@ export default async function handler(
     //   // Handle error, maybe return 500 or log extensively
     // }
 
-    return res.status(200).json(responseData);
+    // Validate final response data before sending
+    const finalResponseValidation = OutreachHistoryResponseSchema.safeParse(responseData);
+    if (!finalResponseValidation.success) {
+        console.error("Data validation error for /api/outreach-history response:", finalResponseValidation.error.flatten());
+        return sendErrorResponse(res, 500, "Failed to prepare outreach history: internal data validation error.", finalResponseValidation.error.flatten());
+    }
+
+    return sendSuccessResponse(res, 200, finalResponseValidation.data);
   } catch (error: any) {
+    if (error instanceof ZodError) {
+      return handleZodError(error, res);
+    }
     console.error('Error fetching outreach history:', error);
-    return res.status(500).json({ success: false, error: 'Failed to fetch outreach history.', details: error.message });
+    return sendErrorResponse(res, 500, 'Failed to fetch outreach history.', error.message);
   } finally {
     await prisma.$disconnect().catch(async (e) => {
       console.error("Failed to disconnect Prisma client", e);
     });
   }
 }
+
+export default withRoleProtection(outreachHistoryHandler, [Role.ADMIN, Role.RECRUITER]);

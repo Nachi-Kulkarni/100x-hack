@@ -1,7 +1,9 @@
 // people-gpt-champion/pages/api/resend-webhook.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { PrismaClient } from '@prisma/client';
-import { ResendWebhookEventSchema } from '../../lib/schemas';
+import { ResendWebhookEventSchema, IApiErrorResponse } from '../../lib/schemas'; // Added IApiErrorResponse
+import { handleZodError, sendErrorResponse, sendSuccessResponse } from '../../lib/apiUtils'; // Standard helpers
+import { ZodError } from 'zod';
 // import crypto from 'crypto'; // For actual signature verification
 
 const prisma = new PrismaClient();
@@ -66,51 +68,39 @@ const RESEND_WEBHOOK_SECRET = process.env.RESEND_WEBHOOK_SECRET || 'your-webhook
  *               description: Timestamp of the event.
  *           # Other properties may exist in data depending on the event type
  */
+// Define a simple success response type for webhooks
+type WebhookSuccessResponse = { success: boolean; message: string };
+
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse
+  res: NextApiResponse<WebhookSuccessResponse | IApiErrorResponse>
 ) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
-    return res.status(405).json({ success: false, error: `Method ${req.method} Not Allowed` });
+    return sendErrorResponse(res, 405, `Method ${req.method} Not Allowed`);
   }
 
   // --- IMPORTANT: Webhook Signature Verification (Placeholder) ---
-  // In production, you MUST verify the webhook signature from Resend.
-  // This is a simplified placeholder and does not offer real security.
-  // Example using Node.js crypto (requires `npm install @types/node` if not already, and proper setup):
-  // const signature = req.headers['resend-signature']; // Or the header Resend uses
-  // if (!signature) {
-  //   return res.status(401).json({ success: false, error: 'Signature missing.' });
-  // }
-  // try {
-  //   const shasum = crypto.createHmac('sha256', RESEND_WEBHOOK_SECRET);
-  //   shasum.update(JSON.stringify(req.body)); // Or raw body if needed
-  //   const digest = shasum.digest('hex');
-  //   if (digest !== signature) {
-  //     return res.status(401).json({ success: false, error: 'Invalid signature.' });
-  //   }
-  // } catch (error) {
-  //   console.error('Error during signature verification:', error);
-  //   return res.status(400).json({ success: false, error: 'Error verifying signature.' });
-  // }
-  // For now, we'll skip actual verification for sandbox environment.
+  // Skipping actual verification for this exercise.
   console.warn("Resend webhook signature verification is currently skipped. DO NOT use in production without implementing it.");
-
-  // Validate request body against Zod schema
-  const validationResult = ResendWebhookEventSchema.safeParse(req.body);
-  if (!validationResult.success) {
-    console.error('Invalid Resend webhook payload:', validationResult.error.flatten());
-    return res.status(400).json({ success: false, errors: validationResult.error.flatten() });
-  }
-
-  const { type, data } = validationResult.data;
-  const resendMessageId = data.email_id;
-  const eventTimestamp = new Date(data.created_at);
+  // if (!verifySignature(req)) { // Replace with actual verification logic
+  //   return sendErrorResponse(res, 401, 'Invalid webhook signature.');
+  // }
 
   try {
+    // Validate request body against Zod schema
+    const validationResult = ResendWebhookEventSchema.safeParse(req.body);
+    if (!validationResult.success) {
+      // Use handleZodError for consistent Zod error responses
+      return handleZodError(validationResult.error, res);
+    }
+
+    const { type, data } = validationResult.data;
+    const resendMessageId = data.email_id;
+    const eventTimestamp = new Date(data.created_at);
+
     const updateData: { status: string; openedAt?: Date; clickedAt?: Date } = {
-      status: type, // Default to setting status to the event type, e.g., "email.delivered"
+      status: type, // Default to setting status to the event type
     };
 
     switch (type) {
@@ -122,17 +112,14 @@ export default async function handler(
         updateData.openedAt = eventTimestamp;
         break;
       case 'email.clicked':
-        updateData.status = 'clicked'; // Could also be 'opened' if not already set
+        updateData.status = 'clicked';
         updateData.clickedAt = eventTimestamp;
-        // If an email is clicked, it implies it was also opened.
-        // You might want to set openedAt if it's not already set.
-        // This logic can be refined based on desired behavior.
         const currentOutreachForClick = await prisma.emailOutreach.findUnique({
           where: { resendMessageId },
           select: { openedAt: true }
         });
         if (currentOutreachForClick && !currentOutreachForClick.openedAt) {
-            updateData.openedAt = eventTimestamp;
+            updateData.openedAt = eventTimestamp; // Also mark as opened if clicked
         }
         break;
       case 'email.bounced':
@@ -141,15 +128,12 @@ export default async function handler(
       case 'email.complained':
         updateData.status = 'complained';
         break;
-      // 'email.sent' is usually the initial state, handled by the send-email API.
-      // No specific update needed here unless there's a delay and Resend confirms 'sent' later.
       case 'email.sent':
-         // Potentially update if not already 'sent' or to confirm.
-         // For now, we assume 'sent' is set by the originating API.
-        return res.status(200).json({ success: true, message: `Webhook for event '${type}' received, no specific action taken.` });
+        // Usually 'sent' is the initial state. No specific update needed here unless logic changes.
+        return sendSuccessResponse(res, 200, { success: true, message: `Webhook for event '${type}' received, no specific action taken.` });
       default:
         console.log(`Received unhandled Resend webhook event type: ${type}`);
-        return res.status(200).json({ success: true, message: `Webhook event type '${type}' received but not explicitly handled.` });
+        return sendSuccessResponse(res, 200, { success: true, message: `Webhook event type '${type}' received but not explicitly handled.` });
     }
 
     const updatedOutreach = await prisma.emailOutreach.update({
@@ -157,20 +141,18 @@ export default async function handler(
       data: updateData,
     });
 
-    if (!updatedOutreach) {
-      // This case should be rare if resendMessageId is always valid from webhooks
-      return res.status(404).json({ success: false, error: `EmailOutreach record not found for Resend Message ID: ${resendMessageId}` });
-    }
-
-    return res.status(200).json({ success: true, message: `Webhook processed for event '${type}'.` });
+    // No need to check !updatedOutreach if using Prisma, as update throws P2025 if record not found.
+    return sendSuccessResponse(res, 200, { success: true, message: `Webhook processed for event '${type}'.` });
 
   } catch (error: any) {
-    console.error(`Error processing Resend webhook for event '${type}', Resend ID '${resendMessageId}':`, error);
-    if (error.code === 'P2025') { // Prisma: Record to update not found
-      return res.status(404).json({ success: false, error: `EmailOutreach record not found when attempting to update for Resend Message ID: ${resendMessageId}` });
+    if (error instanceof ZodError) { // Should be caught by safeParse, but as a safeguard
+        return handleZodError(error, res);
     }
-    const errorMessage = error.message || 'An unexpected error occurred.';
-    return res.status(500).json({ success: false, error: `Failed to process webhook: ${errorMessage}` });
+    console.error(`Error processing Resend webhook for event '${req.body?.type}', Resend ID '${req.body?.data?.email_id}':`, error);
+    if (error.code === 'P2025') { // Prisma: Record to update not found
+      return sendErrorResponse(res, 404, `EmailOutreach record not found for Resend Message ID: ${req.body?.data?.email_id}`);
+    }
+    return sendErrorResponse(res, 500, 'Failed to process webhook.', error.message);
   } finally {
     await prisma.$disconnect().catch(async (e) => {
       console.error("Failed to disconnect Prisma client", e);

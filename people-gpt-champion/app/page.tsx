@@ -1,7 +1,9 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useSession } from "next-auth/react"; // Import useSession
 import OutreachModal from '@/components/OutreachModal'; // Added import
+import { Role } from '@prisma/client'; // Import Role enum
 
 // Define Candidate and related types based on schemas.ts
 interface ScoreBreakdown {
@@ -115,6 +117,9 @@ const ProgressBar = ({ score, tooltipText, barColor = '#4CAF50', label }: { scor
 
 
 export default function HomePage() {
+  const { data: session, status } = useSession(); // Use the hook
+  const userRole = session?.user?.role; // Get role from session
+
   const [query, setQuery] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [weights, setWeights] = useState({
@@ -278,8 +283,25 @@ export default function HomePage() {
 
   return (
     <div style={{ fontFamily: 'sans-serif', maxWidth: '900px', margin: '0 auto', padding: '20px' }}>
+      {status === "loading" && <p>Loading session...</p>}
+      {session && (
+        <div style={{ padding: "10px", marginBottom: "10px", backgroundColor: "#e6f7ff", border: "1px solid #91d5ff", borderRadius: "4px" }}>
+          <p>Welcome, {session.user?.name || session.user?.email}! (Role: {userRole || 'Unknown'})</p>
+        </div>
+      )}
+
+      {/* Conditional UI for ADMIN role */}
+      {userRole === Role.ADMIN && (
+        <div style={{ padding: "10px", marginBottom: "20px", backgroundColor: "#fffbe6", border: "1px solid #ffe58f", borderRadius: "4px" }}>
+          <h2>Admin Controls</h2>
+          <p>Special administrative actions can be placed here.</p>
+          <button style={{padding: "8px 12px", backgroundColor: "orange", color: "white", border: "none", borderRadius: "4px"}}>Admin Action Button</button>
+        </div>
+      )}
+
       <h1>Candidate Search</h1>
 
+      {/* Example of disabling a button based on role */}
       <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'center' }}>
         <input
           type="text"
@@ -296,26 +318,62 @@ export default function HomePage() {
         </button>
         <button
           onClick={() => {
-            // console.log("Selected candidate IDs for outreach:", selectedCandidateIds); // Keep if needed
             if (selectedCandidateIds.length > 0) {
-              setIsOutreachModalOpen(true); // Open the modal
+              setIsOutreachModalOpen(true);
             }
           }}
-          disabled={selectedCandidateIds.length === 0}
+          // Disable outreach button for RECRUITERs, enable for ADMIN and USER (example logic)
+          disabled={selectedCandidateIds.length === 0 || userRole === Role.RECRUITER}
           style={{
             padding: '10px 15px',
             fontSize: '16px',
-            cursor: selectedCandidateIds.length === 0 ? 'not-allowed' : 'pointer',
+            cursor: (selectedCandidateIds.length === 0 || userRole === Role.RECRUITER) ? 'not-allowed' : 'pointer',
             border: 'none',
-            backgroundColor: selectedCandidateIds.length === 0 ? '#ccc' : '#28a745',
+            backgroundColor: (selectedCandidateIds.length === 0 || userRole === Role.RECRUITER) ? '#ccc' : '#28a745',
             color: 'white',
             borderRadius: '4px',
             marginLeft: '10px'
           }}
         >
-          Initiate Outreach ({selectedCandidateIds.length})
+          Initiate Outreach ({selectedCandidateIds.length}) {userRole === Role.RECRUITER ? "(Disabled for Recruiters)" : ""}
         </button>
       </div>
+
+      {/* Example of hiding an element for non-ADMIN users */}
+      {userRole === Role.ADMIN && (
+        <div style={{ marginBottom: '20px', padding: '15px', border: '1px solid #ddd', borderRadius: '4px', backgroundColor: '#f0f0f0' }}>
+            <p>This entire section is visible only to ADMIN users.</p>
+        </div>
+      )}
+
+      {/* New RBAC UI Examples */}
+      <div style={{marginTop: "20px", marginBottom: "20px", padding: "15px", border: "1px solid #ccc", borderRadius: "4px"}}>
+        <h2 style={{marginTop: 0}}>Role-Specific Features</h2>
+
+        {/* Example 2: Recruiter/Admin Feature Button */}
+        {(userRole === Role.ADMIN || userRole === Role.RECRUITER) && (
+          <button style={{padding: "10px 15px", marginRight:"10px", backgroundColor: "teal", color: "white", border: "none", borderRadius: "4px"}}>
+            Access Candidate Database
+          </button>
+        )}
+
+        {/* Example 3: Feature Disabled for Basic User */}
+        <button
+          style={{
+            padding: "10px 15px",
+            backgroundColor: (userRole === Role.USER || !session) ? "#aaa" : "purple",
+            color: "white",
+            border: "none",
+            borderRadius: "4px",
+            cursor: (userRole === Role.USER || !session) ? "not-allowed" : "pointer"
+          }}
+          disabled={userRole === Role.USER || !session}
+          title={(userRole === Role.USER || !session) ? "This action requires Recruiter or Admin privileges." : "Perform an advanced action."}
+        >
+          Perform Advanced Action {(userRole === Role.USER || !session) ? "(Disabled)" : ""}
+        </button>
+      </div>
+
 
       <div style={{ marginBottom: '20px', padding: '15px', border: '1px solid #ddd', borderRadius: '4px', backgroundColor: '#f9f9f9' }}>
         <h3 style={{marginTop: 0}}>Adjust Scoring Weights (Sum to 1)</h3>

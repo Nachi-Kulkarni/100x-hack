@@ -1,7 +1,9 @@
 // people-gpt-champion/pages/api/email-templates.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { PrismaClient } from '@prisma/client';
-import { EmailTemplatesApiResponseSchema } from '../../lib/schemas'; // Zod schema for validation
+import { PrismaClient, Role } from '@prisma/client'; // Import Role
+import { EmailTemplatesApiResponseSchema, IEmailTemplatesApiResponse, IApiErrorResponse } from '../../lib/schemas'; // Zod schema for validation
+import { sendSuccessResponse, sendErrorResponse } from '../../lib/apiUtils'; // API response helpers
+import { withRoleProtection } from '../../lib/authUtils'; // Import withRoleProtection
 
 const prisma = new PrismaClient();
 
@@ -50,14 +52,16 @@ const prisma = new PrismaClient();
  *       items:
  *         $ref: '#/components/schemas/EmailTemplateApiResponse'
  */
-export default async function handler(
+async function emailTemplatesHandler(
   req: NextApiRequest,
-  res: NextApiResponse
+  res: NextApiResponse<IEmailTemplatesApiResponse | IApiErrorResponse> // Use specific types
 ) {
-  if (req.method !== 'GET') {
-    res.setHeader('Allow', ['GET']);
-    return res.status(405).json({ success: false, error: `Method ${req.method} Not Allowed` });
-  }
+  // Method check already handled by withRoleProtection or done before this handler normally
+  // if (req.method !== 'GET') {
+  //   res.setHeader('Allow', ['GET']);
+  //   return sendErrorResponse(res, 405, `Method ${req.method} Not Allowed`);
+  // }
+  // Session and role check is handled by withRoleProtection
 
   try {
     const templates = await prisma.emailTemplate.findMany({
@@ -85,22 +89,23 @@ export default async function handler(
     // Optionally, filter out templates that have no non-archived versions
     const activeTemplates = templates.filter(t => t.versions.length > 0);
 
-    // Validate the response data with Zod (optional but good practice)
+    // Validate the response data with Zod
     const validationResult = EmailTemplatesApiResponseSchema.safeParse(activeTemplates);
     if (!validationResult.success) {
         console.error("Data validation error for /api/email-templates response:", validationResult.error.flatten());
-        // Decide if to still send data or an error. For now, sending potentially unvalidated data if parsing fails.
-        // Or throw: throw new Error("Server data validation failed for email templates.");
+        // If server-side data structure is invalid, it's a server error.
+        return sendErrorResponse(res, 500, "Failed to prepare email templates: internal data validation failed.", validationResult.error.flatten());
     }
 
-
-    return res.status(200).json(activeTemplates); // Send validated data if validationResult.success, or raw if not strictly enforcing
+    return sendSuccessResponse(res, 200, validationResult.data);
   } catch (error: any) {
     console.error('Error fetching email templates:', error);
-    return res.status(500).json({ success: false, error: 'Failed to fetch email templates.', details: error.message });
+    return sendErrorResponse(res, 500, 'Failed to fetch email templates.', error.message);
   } finally {
     await prisma.$disconnect().catch(async (e) => {
       console.error("Failed to disconnect Prisma client", e);
     });
   }
 }
+
+export default withRoleProtection(emailTemplatesHandler, [Role.ADMIN, Role.RECRUITER]);
