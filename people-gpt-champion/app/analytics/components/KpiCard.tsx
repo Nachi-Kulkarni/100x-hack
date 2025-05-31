@@ -11,11 +11,11 @@ interface KpiCardProps {
 
 const KpiCard: React.FC<KpiCardProps> = ({ title, value, description }) => {
   return (
-    <div className="bg-white shadow rounded-lg p-4">
-      <h3 className="text-sm font-medium text-gray-500 truncate">{title}</h3>
-      <p className="mt-1 text-3xl font-semibold text-gray-900">{value}</p>
+    <div className="bg-white dark:bg-neutral-800 shadow rounded-lg p-4 border border-neutral-200 dark:border-neutral-700">
+      <h3 className="text-sm font-medium text-neutral-500 dark:text-neutral-400 truncate">{title}</h3>
+      <p className="mt-1 text-3xl font-semibold text-neutral-900 dark:text-neutral-100">{value}</p>
       {description && (
-        <p className="text-sm text-gray-500 mt-1">{description}</p>
+        <p className="text-sm text-neutral-500 dark:text-neutral-400 mt-1">{description}</p>
       )}
     </div>
   );

@@ -1,9 +1,18 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from 'react';
-import OutreachModal from '@/components/OutreachModal'; // Added import
+import OutreachModal from '@/components/OutreachModal';
+import { ThemeSwitcher } from '../components/ThemeSwitcher';
 
-// Define Candidate and related types based on schemas.ts
+// New Component Imports
+import SearchInput from '../components/SearchInput';
+import CandidateCard from '../components/CandidateCard'; // Removed alias
+import ChatInput from '../components/ChatInput';
+import ChatMessageDisplay, { Message } from '../components/ChatMessageDisplay';
+import FilterPanel, { FilterCategory, FilterOption } from '../components/FilterPanel';
+
+
+// Define Candidate and related types based on schemas.ts (existing)
 interface ScoreBreakdown {
   skill_match: number;
   experience_relevance: number;
@@ -122,11 +131,146 @@ export default function HomePage() {
     w_experience: 0.3,
     w_culture: 0.3,
   });
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [candidates, setCandidates] = useState<Candidate[]>([]); // For existing API-driven search results
   const [isLoading, setIsLoading] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
-  const [selectedCandidateIds, setSelectedCandidateIds] = useState<string[]>([]);
-  const [isOutreachModalOpen, setIsOutreachModalOpen] = useState(false); // Added state for modal
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState<string[]>([]); // For existing outreach modal selection from search results
+  const [isOutreachModalOpen, setIsOutreachModalOpen] = useState(false);
+  const [testErrorThrown, setTestErrorThrown] = useState(false); // Sentry test error
+
+// Utility function for percentile calculation
+const calculatePercentileRanks = (candidates: Candidate[]): Candidate[] => {
+  if (!candidates || candidates.length === 0) {
+    return [];
+  }
+  // Ensure candidates have match_score, filter out those that don't for safety if necessary
+  const validCandidates = candidates.filter(c => typeof c.match_score === 'number');
+  if (validCandidates.length === 0) {
+    // If no candidates have a valid score, return original candidates with default percentile_rank
+    return candidates.map(c => ({ ...c, percentile_rank: c.percentile_rank !== undefined ? c.percentile_rank : 0 }));
+  }
+
+  const maxScore = Math.max(...validCandidates.map(c => c.match_score));
+
+  return candidates.map(candidate => {
+    if (typeof candidate.match_score !== 'number') {
+      return { ...candidate, percentile_rank: candidate.percentile_rank !== undefined ? candidate.percentile_rank : 0 }; // Default for candidates without a score
+    }
+
+    let numStrictlyLess = 0;
+    if (validCandidates.length > 1) {
+      numStrictlyLess = validCandidates.filter(c => c.match_score < candidate.match_score).length;
+    }
+
+    let percentile;
+    // validCandidates.length will be at least 1 if we reached here and candidate.match_score is a number
+    if (candidate.match_score === maxScore) {
+      percentile = 100;
+    } else if (validCandidates.length === 1) { // Single candidate with a score is 100th percentile
+      percentile = 100;
+    } else {
+      // Denominator should be (validCandidates.length - 1)
+      // However, if all remaining candidates have the same score as the current one,
+      // and it's not the maxScore, this could lead to division by zero if validCandidates.length -1 is 0
+      // The logic of (numStrictlyLess / (denominator)) handles cases where multiple candidates exist.
+      // If validCandidates.length is 1, it's caught by the previous condition.
+      // If all candidates have the same score, numStrictlyLess will be 0, so percentile will be 0 (unless it's maxScore).
+      // This seems to be the intended logic from the original implementation.
+      const denominator = validCandidates.length -1;
+      percentile = denominator > 0 ? (numStrictlyLess / denominator) * 100 : 100; // if only one candidate, or all same score below max, treat as 100 to avoid div by 0 for this specific interpretation. Original code implied this for single item lists.
+    }
+    return { ...candidate, percentile_rank: parseFloat(percentile.toFixed(1)) };
+  });
+};
+
+  // State for new UI components
+  const [activeSearchQuery, setActiveSearchQuery] = useState('');
+  const [appliedFilters, setAppliedFilters] = useState<Record<string, any>>({});
+  const [newSearchResults, setNewSearchResults] = useState<Candidate[]>([]);
+  const [isNewSearchLoading, setIsNewSearchLoading] = useState(false);
+  const [newSearchError, setNewSearchError] = useState<string | null>(null);
+
+  const [chatMessages, setChatMessages] = useState<Message[]>([
+    { id: 'welcome', text: 'Welcome to the chat! Type a message below.', sender: 'system', timestamp: new Date() }
+  ]);
+  // selectedCandidateIds will be used for the OutreachModal as selectedIdsForModal logic (already exists)
+
+  const throwTestError = () => {
+    setTestErrorThrown(true); // Optional: give some UI feedback
+    throw new Error("Sentry Test Error - Client Side - " + new Date().toISOString());
+  };
+
+  const handleSendMessage = (text: string) => {
+    const newUserMessage: Message = { id: Date.now().toString(), text, sender: 'user', timestamp: new Date() };
+    setChatMessages(prev => [...prev, newUserMessage]);
+    // Dummy AI response
+    setTimeout(() => {
+      const aiResponse: Message = { id: (Date.now() + 1).toString(), text: `AI received: "${text}"`, sender: 'ai', timestamp: new Date() };
+      setChatMessages(prev => [...prev, aiResponse]);
+    }, 500);
+  };
+
+  const sampleFiltersData: FilterCategory[] = [
+    { id: 'availability', label: 'Availability', type: 'select', options: [{value: 'now', label: 'Available Now'}, {value: 'next_month', label: 'Next Month'}] },
+    { id: 'skills', label: 'Key Skills', type: 'multiselect', options: [{value: 'react', label: 'React'}, {value: 'node', label: 'Node.js'}, {value: 'python', label: 'Python'}, {value: 'typescript', label: 'TypeScript'}, {value: 'java', label: 'Java'}] },
+    { id: 'experience', label: 'Min Experience (Years)', type: 'select', options: [{value: '1', label: '1+'}, {value: '3', label: '3+'}, {value: '5', label: '5+'}] },
+    { id: 'remote', label: 'Remote Only', type: 'checkbox', options: [{value: 'true', label: 'Yes'}] }
+  ];
+
+  const executeNewSearch = useCallback(async (currentQuery: string, currentFilters: Record<string, any>) => {
+    if (!currentQuery && Object.keys(currentFilters).length === 0) {
+      setNewSearchResults([]);
+      setNewSearchError(null);
+      setIsNewSearchLoading(false); // Ensure loading is false if no action taken
+      return;
+    }
+    setIsNewSearchLoading(true);
+    setNewSearchError(null);
+    try {
+      const payload = {
+        query: currentQuery,
+        filters: currentFilters,
+        weights: weights, // Using weights from legacy state for now
+      };
+      const response = await fetch('/api/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data: SearchApiResponse = await response.json(); // SearchApiResponse is already defined
+      if (!response.ok) {
+        throw new Error(data.error || `API Error: ${response.statusText}`);
+      }
+
+      let fetchedCandidates = data.candidates || [];
+      fetchedCandidates = calculatePercentileRanks(fetchedCandidates);
+      setNewSearchResults(fetchedCandidates);
+    } catch (err: any) {
+      setNewSearchError(err.message || 'Failed to fetch new search results.');
+      setNewSearchResults([]);
+    } finally {
+      setIsNewSearchLoading(false);
+    }
+  }, [weights]); // Dependency: weights (from legacy state)
+
+  const debouncedExecuteNewSearch = useCallback(debounce(executeNewSearch, 700), [executeNewSearch]);
+
+  const handleNewSearchTrigger = (query: string) => {
+    setActiveSearchQuery(query);
+    executeNewSearch(query, appliedFilters); // Non-debounced for direct search action
+  };
+
+  const handleNewFilterChange = (filterId: string, value: any) => {
+    const newFilters = { ...appliedFilters };
+    if (value === undefined || (Array.isArray(value) && value.length === 0) || value === '') {
+      delete newFilters[filterId];
+    } else {
+      newFilters[filterId] = value;
+    }
+    setAppliedFilters(newFilters);
+    // Debounce API call when filters change
+    debouncedExecuteNewSearch(activeSearchQuery, newFilters);
+  };
 
   const handleCandidateSelection = (candidateId: string) => {
     setSelectedCandidateIds(prevSelectedIds =>
@@ -155,30 +299,7 @@ export default function HomePage() {
       }
 
       let fetchedCandidates = data.candidates || [];
-      if (fetchedCandidates.length > 0) {
-        const maxScore = Math.max(...fetchedCandidates.map(c => c.match_score));
-
-        fetchedCandidates = fetchedCandidates.map(candidate => {
-          let numStrictlyLess = 0;
-          if (fetchedCandidates.length > 1) { // Only relevant if more than one candidate
-            numStrictlyLess = fetchedCandidates.filter(c => c.match_score < candidate.match_score).length;
-          }
-
-          let percentile;
-          if (fetchedCandidates.length === 0) { // Should not happen if inside this block
-            percentile = 0;
-          } else if (candidate.match_score === maxScore) {
-            percentile = 100;
-          } else if (fetchedCandidates.length === 1) { // Single candidate is 100th (covered by maxScore too)
-            percentile = 100;
-          } else {
-            // Avoid division by zero if length is 1 (though caught by previous condition)
-            percentile = (numStrictlyLess / (fetchedCandidates.length - 1)) * 100;
-          }
-
-          return { ...candidate, percentile_rank: parseFloat(percentile.toFixed(1)) };
-        });
-      }
+      fetchedCandidates = calculatePercentileRanks(fetchedCandidates);
       setCandidates(fetchedCandidates);
 
       if (data.message) console.log(data.message);
@@ -277,149 +398,184 @@ export default function HomePage() {
 
 
   return (
-    <div style={{ fontFamily: 'sans-serif', maxWidth: '900px', margin: '0 auto', padding: '20px' }}>
-      <h1>Candidate Search</h1>
+    // Use dark:bg-neutral-900 for overall page background for better contrast with components in dark mode
+    <div className="min-h-screen bg-neutral-100 dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 p-4 md:p-8">
+      <div className="max-w-5xl mx-auto space-y-12">
 
-      <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'center' }}>
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Enter search query"
-          style={{ width: 'calc(70% - 5px)', padding: '10px', marginRight: '10px', fontSize: '16px', border: '1px solid #ccc', borderRadius: '4px' }}
-        />
-        <button
-          onClick={handleSearch}
-          style={{ padding: '10px 15px', fontSize: '16px', cursor: 'pointer', border: 'none', backgroundColor: '#007bff', color: 'white', borderRadius: '4px' }}
-        >
-          Search
-        </button>
-        <button
-          onClick={() => {
-            // console.log("Selected candidate IDs for outreach:", selectedCandidateIds); // Keep if needed
-            if (selectedCandidateIds.length > 0) {
-              setIsOutreachModalOpen(true); // Open the modal
-            }
-          }}
-          disabled={selectedCandidateIds.length === 0}
-          style={{
-            padding: '10px 15px',
-            fontSize: '16px',
-            cursor: selectedCandidateIds.length === 0 ? 'not-allowed' : 'pointer',
-            border: 'none',
-            backgroundColor: selectedCandidateIds.length === 0 ? '#ccc' : '#28a745',
-            color: 'white',
-            borderRadius: '4px',
-            marginLeft: '10px'
-          }}
-        >
-          Initiate Outreach ({selectedCandidateIds.length})
-        </button>
-      </div>
-
-      <div style={{ marginBottom: '20px', padding: '15px', border: '1px solid #ddd', borderRadius: '4px', backgroundColor: '#f9f9f9' }}>
-        <h3 style={{marginTop: 0}}>Adjust Scoring Weights (Sum to 1)</h3>
-        {(['w_skill', 'w_experience', 'w_culture'] as (keyof typeof weights)[]).map(weightKey => (
-          <div key={weightKey} style={{marginBottom: '10px'}}>
-            <label htmlFor={weightKey} style={{display: 'block', marginBottom: '3px', fontSize: '14px', color: '#333'}}>
-              {weightKey.replace('w_', '').replace('_', ' ')}: {weights[weightKey].toFixed(2)}
-            </label>
-            <input
-              type="range"
-              id={weightKey}
-              min="0"
-              max="1"
-              step="0.01"
-              value={weights[weightKey]}
-              onChange={(e) => handleWeightChange(weightKey, parseFloat(e.target.value))}
-              style={{ width: '100%' }}
-            />
-          </div>
-        ))}
-      </div>
-
-      {isLoading && <p style={{textAlign: 'center', fontSize: '18px'}}>Loading...</p>}
-      {apiError && <p style={{ color: 'red', textAlign: 'center', border: '1px solid red', padding: '10px', borderRadius: '4px' }}>Error: {apiError}</p>}
-
-      {!isLoading && !apiError && candidates.length === 0 && searchTerm && (
-        <p style={{textAlign: 'center', fontSize: '16px'}}>No candidates found for "{searchTerm}".</p>
-      )}
-
-      {candidates.length > 0 && (
-        <div>
-          <h2 style={{borderBottom: '2px solid #eee', paddingBottom: '10px'}}>Search Results for "{searchTerm}"</h2>
-          <div style={{fontSize: '12px', color: '#666', marginBottom: '10px'}}>
-            Using weights: Skill ({weights.w_skill.toFixed(2)}), Experience ({weights.w_experience.toFixed(2)}), Culture ({weights.w_culture.toFixed(2)})
-          </div>
-          <ul style={{ listStyleType: 'none', padding: 0 }}>
-            {candidates.map(candidate => (
-              <li key={candidate.id} style={{ display: 'flex', alignItems: 'flex-start', marginBottom: '15px', padding: '15px', border: '1px solid #eee', borderRadius: '4px', backgroundColor: 'white' }}>
-                <input
-                  type="checkbox"
-                  checked={selectedCandidateIds.includes(candidate.id)}
-                  onChange={() => handleCandidateSelection(candidate.id)}
-                  style={{ marginRight: '15px', marginTop:'5px', transform: 'scale(1.2)' }}
-                />
-                <div style={{flexGrow: 1}}> {/* This div will take remaining space */}
-                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                      <h3 style={{margin: '0 0 5px 0'}}>
-                        {candidate.name || 'N/A'}
-                        <span style={{fontSize: '14px', color: '#555'}}> ({candidate.title || 'N/A'})</span>
-                      </h3>
-                      {candidate.source_url && candidate.source_url !== '#' && (
-                          <a href={candidate.source_url} target="_blank" rel="noopener noreferrer" style={{fontSize: '12px'}}>Source</a>
-                      )}
-                  </div>
-                  <p style={{margin: '5px 0', fontSize: '14px', fontWeight: 'bold'}}>
-                    Overall Match Score: {candidate.match_score.toFixed(3)}
-                </p>
-                <p style={{margin: '5px 0', fontSize: '12px', color: '#333'}}>
-                  Percentile Rank: {candidate.percentile_rank.toFixed(1)}%
-                  <span title={`This candidate scores higher than ${candidate.percentile_rank.toFixed(1)}% of other candidates in this list.`} style={{cursor: 'help'}}> (?)</span>
-                </p>
-                {/* Optionally display a few skills */}
-                {candidate.skills && candidate.skills.length > 0 && (
-                  <p style={{margin: '5px 0', fontSize: '12px', color: '#444'}}>
-                    Skills: {candidate.skills.slice(0, 3).join(', ')}{candidate.skills.length > 3 ? '...' : ''}
-                  </p>
-                )}
-
-                <div style={{ margin: '10px 0' }}>
-                  <ProgressBar
-                    label="Skill Match"
-                    score={candidate.skill_match}
-                    tooltipText={`Skill Match Score: ${candidate.skill_match.toFixed(2)} - Alignment with required skills. Weight: ${weights.w_skill.toFixed(2)}.`}
-                    barColor="#2196F3" // Blue
-                  />
-                  <ProgressBar
-                    label="Experience Relevance"
-                    score={candidate.experience_relevance}
-                    tooltipText={`Experience Relevance Score: ${candidate.experience_relevance.toFixed(2)} - Relevance of past experience. Weight: ${weights.w_experience.toFixed(2)}.`}
-                    barColor="#4CAF50" // Green
-                  />
-                  <ProgressBar
-                    label="Cultural Fit"
-                    score={candidate.cultural_fit}
-                    tooltipText={`Cultural Fit Score: ${candidate.cultural_fit.toFixed(2)} - Potential cultural alignment. Weight: ${weights.w_culture.toFixed(2)}.`}
-                    barColor="#FFC107" // Amber
-                  />
-                </div>
-                <p style={{margin: '5px 0 0 0', fontSize: '12px', color: '#666'}}>
-                  <span style={{fontWeight:"bold"}}>Reasoning:</span> {candidate.reasoning || 'N/A'}
-                </p>
-              </li>
-            ))}
-          </ul>
+        <div className="flex justify-between items-center mb-8">
+          <h1 className="text-2xl sm:text-3xl font-bold text-neutral-800 dark:text-neutral-100">Candidate Search & Outreach</h1>
+          <ThemeSwitcher />
         </div>
-      )}
 
-      {isOutreachModalOpen && (
-        <OutreachModal
-          isOpen={isOutreachModalOpen}
-          onClose={() => setIsOutreachModalOpen(false)}
-          selectedCandidateIds={selectedCandidateIds}
-        />
-      )}
+        {/* Sentry Test Area */}
+        <div className="my-4 p-4 border border-dashed border-red-500 dark:border-red-700 rounded-md bg-white dark:bg-neutral-800">
+          <h3 className="text-lg font-semibold text-red-700 dark:text-red-400 mb-2">Sentry Test Area</h3>
+          <p className="text-sm text-neutral-600 dark:text-neutral-300 mb-3">
+            Click the button below to throw a test error. If Sentry is configured with a valid DSN,
+            this error should be reported to your Sentry dashboard.
+          </p>
+          <button
+            onClick={throwTestError}
+            className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-lg shadow-md transition-colors duration-150 ease-in-out active:bg-red-700"
+          >
+            Throw Client-Side Test Error
+          </button>
+          {testErrorThrown && (
+            <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+              A test error was thrown. Check your Sentry dashboard (if DSN is configured) and the browser console.
+            </p>
+          )}
+        </div>
+
+        {/* Existing Candidate Search and Filtering (Legacy) - Keep for now or phase out */}
+        <section aria-labelledby="legacy-search-heading" className="p-4 md:p-6 bg-white dark:bg-neutral-800 rounded-xl shadow-lg border border-neutral-200 dark:border-neutral-700">
+          <h2 id="legacy-search-heading" className="text-2xl font-semibold mb-4 text-neutral-800 dark:text-neutral-100">Legacy Candidate Search</h2>
+          <div className="flex flex-col md:flex-row items-center gap-4 mb-4">
+            <input
+              type="text"
+              value={query} // Existing state for legacy search
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Enter search query (legacy)"
+              aria-label="Legacy Search Query"
+              className="flex-grow p-3 border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-700 focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 outline-none text-neutral-700 dark:text-neutral-200"
+            />
+            <button
+              onClick={handleSearch} // Existing handler
+              disabled={isLoading} // Disable legacy search button when loading
+              className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-md transition-colors duration-150 ease-in-out disabled:bg-blue-400 dark:disabled:bg-blue-800 disabled:cursor-not-allowed"
+            >
+              {isLoading ? 'Searching...' : 'Search (Legacy)'}
+            </button>
+            <button
+              onClick={() => {
+                if (selectedCandidateIds.length > 0) {
+                  setIsOutreachModalOpen(true);
+                }
+              }}
+              disabled={selectedCandidateIds.length === 0}
+              className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg shadow-md transition-colors duration-150 ease-in-out disabled:bg-neutral-400 dark:disabled:bg-neutral-600 disabled:cursor-not-allowed"
+            >
+              Initiate Outreach ({selectedCandidateIds.length})
+            </button>
+          </div>
+          <div className="p-4 bg-neutral-50 dark:bg-neutral-700 rounded-lg border dark:border-neutral-600">
+            <h3 className="text-lg font-medium mb-2 text-neutral-700 dark:text-neutral-200">Adjust Scoring Weights (Sum to 1)</h3>
+            {(['w_skill', 'w_experience', 'w_culture'] as (keyof typeof weights)[]).map(weightKey => (
+              <div key={weightKey} className="mb-3">
+                <label htmlFor={weightKey} className="block text-sm font-medium text-neutral-600 dark:text-neutral-300 capitalize">
+                  {weightKey.replace('w_', '').replace('_', ' ')}: {weights[weightKey].toFixed(2)}
+                </label>
+                <input
+                  type="range"
+                  id={weightKey}
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={weights[weightKey]}
+                  onChange={(e) => handleWeightChange(weightKey, parseFloat(e.target.value))}
+                  className="w-full h-2 bg-neutral-200 dark:bg-neutral-600 rounded-lg appearance-none cursor-pointer accent-blue-500 dark:accent-blue-400"
+                />
+              </div>
+            ))}
+          </div>
+          {isLoading && <p className="text-center mt-4 p-3 text-neutral-600 dark:text-neutral-300 bg-neutral-100 dark:bg-neutral-700 rounded-md border border-neutral-200 dark:border-neutral-600">Loading legacy results...</p>}
+          {apiError && <p className="text-center mt-4 text-red-600 dark:text-red-400 p-3 bg-red-100 dark:bg-red-800 border border-red-500 dark:border-red-700 rounded-md">Error: {apiError}</p>}
+          {!isLoading && !apiError && candidates.length === 0 && searchTerm && (
+            <p className="text-center mt-4 p-3 text-neutral-600 dark:text-neutral-300 bg-neutral-100 dark:bg-neutral-700 rounded-md border border-neutral-200 dark:border-neutral-600">No candidates found for "{searchTerm}" (legacy).</p>
+          )}
+           {/* Existing candidates list display - simplified for brevity, assuming it's styled adequately or will be removed */}
+          {candidates.length > 0 && (
+            <div className="mt-6">
+              <h3 className="text-xl font-semibold mb-3 text-neutral-800 dark:text-neutral-100">Search Results for "{searchTerm}" (Legacy)</h3>
+              <ul className="space-y-4">
+                {candidates.slice(0,3).map(candidate => ( // Show only top 3 for brevity in this combined view
+                  <li key={candidate.id} className="p-4 bg-neutral-50 dark:bg-neutral-700 rounded-lg shadow border dark:border-neutral-600 flex items-start space-x-3">
+                     <input
+                        type="checkbox"
+                        checked={selectedCandidateIds.includes(candidate.id)}
+                        onChange={() => handleCandidateSelection(candidate.id)}
+                        aria-label={`Select candidate ${candidate.name || 'unnamed'}`}
+                        className="mt-1 h-4 w-4 text-blue-600 border-neutral-300 dark:border-neutral-500 rounded focus:ring-blue-500 dark:focus:ring-blue-400 bg-white dark:bg-neutral-600"
+                      />
+                    <div>
+                      <h4 className="font-semibold text-neutral-800 dark:text-neutral-100">{candidate.name || 'N/A'} <span className="text-sm text-neutral-600 dark:text-neutral-300">({candidate.title || 'N/A'})</span></h4>
+                      <p className="text-sm text-neutral-600 dark:text-neutral-400">Score: {candidate.match_score?.toFixed(2)}</p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+
+
+        {/* New UI Components Section */}
+        <section aria-labelledby="new-components-heading" className="mb-8 p-4 md:p-6 bg-white dark:bg-neutral-800 rounded-xl shadow-lg border border-neutral-200 dark:border-neutral-700">
+          <h2 id="new-components-heading" className="text-2xl font-semibold mb-6 text-neutral-800 dark:text-neutral-100">New Component Integration Area</h2>
+
+          <div className="mb-8"> {/* This div could be a <section> too if Candidate Search & Listing is a major sub-region */}
+            <h3 className="text-xl font-semibold mb-4 text-neutral-700 dark:text-neutral-200">Candidate Search & Listing (New)</h3>
+            <div className="md:flex md:space-x-6">
+              <div className="md:w-1/3 mb-6 md:mb-0">
+                <FilterPanel filters={sampleFiltersData} appliedFilters={appliedFilters} onFilterChange={handleNewFilterChange} />
+              </div>
+              <div className="md:w-2/3">
+                <SearchInput
+                  onSearch={handleNewSearchTrigger}
+                  placeholder="Search candidates (new)..."
+                  initialValue={activeSearchQuery} // Keep SearchInput in sync if query can be set externally
+                  isLoading={isNewSearchLoading} // Pass loading state to new SearchInput
+                />
+                {isNewSearchLoading && <p className="mt-4 text-center p-3 text-neutral-600 dark:text-neutral-300 bg-neutral-100 dark:bg-neutral-700 rounded-md border border-neutral-200 dark:border-neutral-600">Loading new results...</p>}
+                {newSearchError && <p className="mt-4 text-center text-red-600 dark:text-red-400 p-3 bg-red-100 dark:bg-red-800 border border-red-500 dark:border-red-700 rounded-md">Error: {newSearchError}</p>}
+                {!isNewSearchLoading && !newSearchError && newSearchResults.length === 0 && (activeSearchQuery || Object.keys(appliedFilters).length > 0) && (
+                  <p className="mt-4 text-center p-3 text-neutral-600 dark:text-neutral-300 bg-neutral-100 dark:bg-neutral-700 rounded-md border border-neutral-200 dark:border-neutral-600">No candidates found for the current criteria.</p>
+                )}
+                {!isNewSearchLoading && !newSearchError && newSearchResults.length > 0 && (
+                  <div className="mt-6 space-y-4">
+                    {newSearchResults.map(candidate => (
+                      <div key={candidate.id} className="flex items-start space-x-3 p-3 bg-neutral-50 dark:bg-neutral-800 rounded-lg border border-neutral-200 dark:border-neutral-700 shadow-sm hover:shadow-md transition-shadow">
+                        <input
+                          type="checkbox"
+                          checked={selectedCandidateIds.includes(candidate.id)}
+                          onChange={() => handleCandidateSelection(candidate.id)} // Reuse existing handler
+                          aria-label={`Select candidate ${candidate.name || 'unnamed'}`}
+                          className="mt-1 h-4 w-4 text-blue-600 border-neutral-300 dark:border-neutral-500 rounded focus:ring-blue-500 dark:focus:ring-offset-0 dark:focus:ring-offset-neutral-800 bg-white dark:bg-neutral-700 cursor-pointer"
+                        />
+                        <div className="flex-grow"> {/* This div ensures CandidateCard takes remaining space */}
+                          <CandidateCard
+                            candidate={candidate}
+                            onViewDetails={() => console.log('View details for new candidate:', candidate.id)}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="border-t border-neutral-200 dark:border-neutral-700 my-8"></div>
+
+          <section aria-labelledby="chat-example-heading">
+            <h3 id="chat-example-heading" className="text-xl font-semibold mb-4 text-neutral-700 dark:text-neutral-200">Chat Example (New)</h3>
+            <div className="h-[450px] flex flex-col border border-neutral-300 dark:border-neutral-600 rounded-lg shadow">
+              <ChatMessageDisplay messages={chatMessages} />
+              <ChatInput onSendMessage={handleSendMessage} />
+            </div>
+          </section>
+        </section>
+
+
+        {isOutreachModalOpen && (
+          <OutreachModal
+            isOpen={isOutreachModalOpen}
+            onClose={() => setIsOutreachModalOpen(false)}
+            selectedCandidateIds={selectedCandidateIds} // Uses the existing selectedCandidateIds from legacy search results
+          />
+        )}
+      </div>
     </div>
   );
 }
