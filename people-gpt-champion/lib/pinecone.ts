@@ -1,72 +1,74 @@
-import { Pinecone } from '@pinecone-database/pinecone';
+// In people-gpt-champion/lib/pinecone.ts
+import { Pinecone, Index, QueryResponse as PineconeQueryResponse } from '@pinecone-database/pinecone'; // Renamed QueryResponse to avoid conflict
+import CircuitBreaker from 'opossum';
 
 let pineconeClient: Pinecone | null = null;
+let pineconeIndexCache: Index | null = null; // Cache the index object
 
-const getPineconeClient = async (): Promise<Pinecone> => {
+const getPineconeClientInstance = (): Pinecone => {
   if (!process.env.PINECONE_API_KEY) {
     throw new Error('Pinecone API key (PINECONE_API_KEY) not configured');
   }
-
-  // For Pinecone client v3.x and later, environment is not directly used in client instantiation.
-  // The full index host is used when connecting to an index.
-  // We'll check for PINECONE_HOST as a general configuration for the service.
-  if (!process.env.PINECONE_HOST) {
-    throw new Error('Pinecone host (PINECONE_HOST) not configured. This should be your full index host URL.');
-  }
-
   if (pineconeClient) {
     return pineconeClient;
   }
-
-  pineconeClient = new Pinecone({
-    apiKey: process.env.PINECONE_API_KEY,
-    // The 'environment' parameter is deprecated/removed in recent client versions.
-    // The full host for an index is typically specified when calling `pinecone.index(INDEX_NAME)`.
-    // For example, some methods might take `host` directly, or it's part of the index name string.
-  });
-
+  pineconeClient = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
   return pineconeClient;
 };
 
-// Example of how you might get a specific index using the client
-// Note: The exact method to specify the host can vary slightly between minor client versions.
-// Refer to the official Pinecone documentation for the installed client version.
-// const getPineconeIndex = async (indexNameFromEnvOrArg: string) => {
-//   const client = await getPineconeClient();
-//
-//   if (!process.env.PINECONE_INDEX_NAME && !indexNameFromEnvOrArg) {
-//     throw new Error('Pinecone index name not provided via environment or argument.');
-//   }
-//   const indexName = process.env.PINECONE_INDEX_NAME || indexNameFromEnvOrArg;
-//
-//   if (!process.env.PINECONE_HOST) { // This should be the full host for the specific index
-//      throw new Error('Pinecone index host (PINECONE_HOST) not configured for index operations.');
-//   }
-//
-//   // For client v3+, you often pass the full host directly when getting an index object.
-//   // The method might be simply `client.index(indexName)` if the host was configured globally
-//   // or if the indexName itself is the fully qualified host name.
-//   // More commonly, you might need to specify the host if it's not inferred.
-//   // Example: return client.index(indexName, process.env.PINECONE_HOST);
-//   // Or, if the client is configured to use a specific host already:
-//   // return client.index(indexName);
-//   // For now, let's assume the host is specified when getting the index:
-//   return client.Index(indexName, process.env.PINECONE_HOST);
-//   // IMPORTANT: The actual method might be client.index(indexName) and the host is implicit
-//   // or client.index({ host: process.env.PINECONE_HOST }).
-//   // This part needs to be carefully checked against the installed client version's API.
-//   // The example `client.Index(indexName, process.env.PINECONE_HOST)` is a placeholder.
-//   // A common pattern is: `const index = pinecone.Index(PINECONE_INDEX_NAME, PINECONE_HOST_URL_FOR_THAT_INDEX);`
-//   // Or `const index = pinecone.index(PINECONE_INDEX_NAME);` and the host is resolved.
-//   // Let's use a safer approach that is more common with recent versions:
-//   // Assuming PINECONE_HOST is the full URL to the index.
-//   return client.index(process.env.PINECONE_HOST);
+export const getPineconeIndex = (): Index => {
+  if (pineconeIndexCache) {
+    return pineconeIndexCache;
+  }
+  if (!process.env.PINECONE_INDEX_NAME) {
+    throw new Error('Pinecone index name (PINECONE_INDEX_NAME) not configured.');
+  }
+  const client = getPineconeClientInstance();
+  const indexName = process.env.PINECONE_INDEX_NAME;
+  pineconeIndexCache = client.Index(indexName);
+  return pineconeIndexCache;
+};
 
-// };
+// Options for Pinecone circuit breaker
+const pineconeCircuitOptions: CircuitBreaker.Options = {
+  timeout: 10000, // 10s for Pinecone query
+  errorThresholdPercentage: 50,
+  resetTimeout: 30000,
+  name: 'PineconeQuery',
+};
 
+// Original function to be wrapped
+// Note: The parameters must be passed as a single object for Opossum to correctly type them if generic,
+// or explicitly typed as in the example. Here, we'll pass them as separate args to fire()
+const originalQueryPinecone = async (embedding: number[], topK: number): Promise<PineconeQueryResponse> => {
+  const index = getPineconeIndex(); // This ensures index is initialized
+  return index.query({
+    vector: embedding,
+    topK,
+    includeMetadata: true,
+  });
+};
 
-export { getPineconeClient };
+// Create circuit breaker for Pinecone queries
+const queryPineconeBreaker = new CircuitBreaker(originalQueryPinecone, pineconeCircuitOptions);
 
-// TODO: Add functions for upserting, querying vectors, etc.
-// Remember that the Pinecone index needs to be created with the correct dimensions
-// (e.g., 1536 for OpenAI's text-embedding-ada-002).
+// Updated queryPineconeIndex to use the breaker
+export const queryPineconeIndex = async (embedding: number[], topK: number): Promise<any[]> => {
+  try {
+    // Opossum's .fire() method takes arguments that match the wrapped function's parameters
+    const queryResponse = await queryPineconeBreaker.fire(embedding, topK);
+    return queryResponse.matches || [];
+  } catch (error: any) {
+    console.error('Error querying Pinecone index (via breaker):', error.message);
+    if (error.code === 'EOPENBREAKER') {
+      console.warn('Pinecone circuit breaker is open.');
+      // Potentially re-throw a more specific error or a custom error
+      // to be handled by the API layer for a 503 response.
+    }
+    throw error; // Re-throw the error to be caught by the caller
+  }
+};
+
+// Export the original client getter if needed elsewhere, though getPineconeIndex is more direct for operations.
+// Renaming to avoid conflict if old getPineconeClient existed with different caching.
+export { getPineconeClientInstance as getPineconeClient };
