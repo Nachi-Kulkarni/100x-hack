@@ -1,16 +1,25 @@
-// jest.config.js
+// people-gpt-champion/jest.config.js
 module.exports = {
   preset: 'ts-jest',
-  testEnvironment: 'node',
-  moduleNameMapper: { // If using path aliases like @/lib
-    '^@/lib/(.*)$': '<rootDir>/lib/$1',
-    '^@/pages/(.*)$': '<rootDir>/pages/$1',
-    // Adjust if your aliases are different, e.g. people-gpt-champion/lib/*
-    // This assumes tests are run from the 'people-gpt-champion' directory as root.
-    // If tests are run from '/app', then paths might need to be '<rootDir>/people-gpt-champion/lib/$1'
-    // Given npm install was run in /app/people-gpt-champion, <rootDir> should be /app/people-gpt-champion
+  testEnvironment: 'jest-environment-jsdom', // Use jsdom for React components
+  moduleNameMapper: {
+    // Handle CSS imports (if you use CSS Modules or similar)
+    '\\.(css|less|scss|sass)$': 'identity-obj-proxy',
+    // Handle Next.js path aliases if configured (e.g., "@/*")
+    '^@/(.*)$': '<rootDir>/$1',
   },
-  setupFilesAfterEnv: ['./jest.setup.js'], // Optional: for global setup
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'], // For global test setup
+  globals: {
+    'ts-jest': {
+      tsconfig: 'tsconfig.jest.json', // Use a separate tsconfig for tests if needed
+    },
+  },
+  transform: {
+    '^.+\\.(ts|tsx)$': 'ts-jest',
+    '^.+\\.(js|jsx)$': 'babel-jest', // If you have JS files to transform
+  },
+  // Ignore Next.js build directory and node_modules for tests
+  testPathIgnorePatterns: ['<rootDir>/.next/', '<rootDir>/node_modules/'],
   // Automatically clear mock calls and instances between every test
   clearMocks: true,
 };

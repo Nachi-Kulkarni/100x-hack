@@ -1,0 +1,104 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main # For semantic-release and production-like checks
+      - develop # Or any other development branches
+      - 'feat/**'
+      - 'fix/**'
+      - 'chore/**'
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  validate:
+    name: Validate Code Quality & Build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x] # Test on common Node versions
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci # Use ci for cleaner installs
+
+      - name: Linting
+        run: npm run lint # Assuming 'lint' script is in package.json (Next.js default)
+
+      - name: Formatting Check (Prettier)
+        # Add a prettier check script to package.json if it doesn't exist
+        # e.g., "format:check": "prettier --check ."
+        # If ESLint handles Prettier, this step might be redundant or adjusted
+        run: npm run format:check # Create this script
+
+      - name: Type Checking
+        # Next.js apps often don't need a separate tsc command if build includes it
+        # but explicit check is good.
+        # Ensure tsconfig.json has "noEmit": true for this check.
+        run: npx tsc --noEmit
+
+      - name: Unit & Integration Tests (Stubs)
+        run: npm test # Assuming 'test' script will be configured for Jest
+
+      - name: Build Project
+        run: npm run build # Next.js build command
+
+      # --- Placeholders for Future Steps ---
+      - name: Visual Regression Tests (Placeholder)
+        run: echo "TODO: Implement Visual Regression Tests (e.g., Chromatic)"
+
+      - name: Bundle Size Checks (Placeholder)
+        run: echo "TODO: Implement Bundle Size Checks"
+
+      - name: Security Scans (Placeholder)
+        run: echo "TODO: Implement Security Scans (e.g., Snyk)"
+
+  release:
+    name: Semantic Release
+    runs-on: ubuntu-latest
+    # Condition: Only run on pushes to these branches, NOT on pull requests
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/heads/beta'))
+    needs: validate # Ensure validation job passes before releasing
+    permissions:
+      contents: write # To push releases and commit CHANGELOG.md, package.json
+      issues: write # To comment on issues/PRs
+      pull-requests: write # To comment on issues/PRs
+      id-token: write # If using OIDC for provenance or auth with external services
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false # Important for semantic-release to handle auth
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x' # Or your preferred Node version for release
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure Git User
+        run: |
+          git config user.name "semantic-release-bot"
+          git config user.email "semantic-release-bot@users.noreply.github.com"
+
+      - name: Run semantic-release
+        run: npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # NPM_TOKEN: ${{ secrets.NPM_TOKEN }} # Uncomment if publishing to npm
