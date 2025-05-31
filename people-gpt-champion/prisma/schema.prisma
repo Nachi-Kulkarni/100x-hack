@@ -168,8 +168,8 @@ model EmailTemplateVersion {
 
 model EmailOutreach {
   id                String   @id @default(cuid())
-  templateVersionId String
-  templateVersion   EmailTemplateVersion @relation(fields: [templateVersionId], references: [id])
+  templateVersionId String?
+  templateVersion   EmailTemplateVersion? @relation(fields: [templateVersionId], references: [id])
   recipientEmail    String
   sentAt            DateTime @default(now())
   resendMessageId   String   @unique // From Resend response, for webhook matching
