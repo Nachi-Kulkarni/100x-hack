@@ -16,11 +16,15 @@ model Candidate {
   updatedAt DateTime @updatedAt
   name      String
   email     String   @unique
+  phone     String?
+  address   String?
   linkedinUrl String?
   githubUrl   String?
   resumeText  String?
   skills    Json?    // Store as JSON array of strings
-  experienceYears Int?
+  workExperience Json?
+  education Json?
+  certifications Json?
   vectorEmbedding Bytes? // For Pinecone or pgvector
   rankings  Ranking[]
   outreaches OutreachLog[]
@@ -45,7 +49,7 @@ model Ranking {
   rank        Int
   score       Float
   reason      String?
-  unique (queryId, candidateId)
+  @@unique([queryId, candidateId])
 }
 
 model OutreachLog {
