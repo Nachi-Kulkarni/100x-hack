@@ -7,6 +7,7 @@ let ldClient: LDClient.LDClient | null = null;
 export interface AppFlags {
   streamingSearch: boolean;
   multiChannelOutreach: boolean;
+  "twilio-sms-outreach": boolean; // Added for Twilio SMS feature
   // Add other flags here as they are defined
 }
 

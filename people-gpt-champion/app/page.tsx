@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from 'react';
+import OutreachModal from '@/components/OutreachModal'; // Added import
 
 // Define Candidate and related types based on schemas.ts
 interface ScoreBreakdown {
@@ -124,6 +125,16 @@ export default function HomePage() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState<string[]>([]);
+  const [isOutreachModalOpen, setIsOutreachModalOpen] = useState(false); // Added state for modal
+
+  const handleCandidateSelection = (candidateId: string) => {
+    setSelectedCandidateIds(prevSelectedIds =>
+      prevSelectedIds.includes(candidateId)
+        ? prevSelectedIds.filter(id => id !== candidateId) // Deselect
+        : [...prevSelectedIds, candidateId] // Select
+    );
+  };
 
   const fetchCandidates = useCallback(async (currentQuery: string, currentWeights: typeof weights) => {
     if (!currentQuery) {
@@ -266,10 +277,10 @@ export default function HomePage() {
 
 
   return (
-    <div style={{ fontFamily: 'sans-serif', maxWidth: '800px', margin: '0 auto', padding: '20px' }}>
+    <div style={{ fontFamily: 'sans-serif', maxWidth: '900px', margin: '0 auto', padding: '20px' }}>
       <h1>Candidate Search</h1>
 
-      <div style={{ marginBottom: '20px' }}>
+      <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'center' }}>
         <input
           type="text"
           value={query}
@@ -282,6 +293,27 @@ export default function HomePage() {
           style={{ padding: '10px 15px', fontSize: '16px', cursor: 'pointer', border: 'none', backgroundColor: '#007bff', color: 'white', borderRadius: '4px' }}
         >
           Search
+        </button>
+        <button
+          onClick={() => {
+            // console.log("Selected candidate IDs for outreach:", selectedCandidateIds); // Keep if needed
+            if (selectedCandidateIds.length > 0) {
+              setIsOutreachModalOpen(true); // Open the modal
+            }
+          }}
+          disabled={selectedCandidateIds.length === 0}
+          style={{
+            padding: '10px 15px',
+            fontSize: '16px',
+            cursor: selectedCandidateIds.length === 0 ? 'not-allowed' : 'pointer',
+            border: 'none',
+            backgroundColor: selectedCandidateIds.length === 0 ? '#ccc' : '#28a745',
+            color: 'white',
+            borderRadius: '4px',
+            marginLeft: '10px'
+          }}
+        >
+          Initiate Outreach ({selectedCandidateIds.length})
         </button>
       </div>
 
@@ -321,18 +353,25 @@ export default function HomePage() {
           </div>
           <ul style={{ listStyleType: 'none', padding: 0 }}>
             {candidates.map(candidate => (
-              <li key={candidate.id} style={{ marginBottom: '15px', padding: '15px', border: '1px solid #eee', borderRadius: '4px', backgroundColor: 'white' }}>
-                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                    <h3 style={{margin: '0 0 5px 0'}}>
-                      {candidate.name || 'N/A'}
-                      <span style={{fontSize: '14px', color: '#555'}}> ({candidate.title || 'N/A'})</span>
-                    </h3>
-                    {candidate.source_url && candidate.source_url !== '#' && (
-                        <a href={candidate.source_url} target="_blank" rel="noopener noreferrer" style={{fontSize: '12px'}}>Source</a>
-                    )}
-                </div>
-                <p style={{margin: '5px 0', fontSize: '14px', fontWeight: 'bold'}}>
-                  Overall Match Score: {candidate.match_score.toFixed(3)}
+              <li key={candidate.id} style={{ display: 'flex', alignItems: 'flex-start', marginBottom: '15px', padding: '15px', border: '1px solid #eee', borderRadius: '4px', backgroundColor: 'white' }}>
+                <input
+                  type="checkbox"
+                  checked={selectedCandidateIds.includes(candidate.id)}
+                  onChange={() => handleCandidateSelection(candidate.id)}
+                  style={{ marginRight: '15px', marginTop:'5px', transform: 'scale(1.2)' }}
+                />
+                <div style={{flexGrow: 1}}> {/* This div will take remaining space */}
+                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                      <h3 style={{margin: '0 0 5px 0'}}>
+                        {candidate.name || 'N/A'}
+                        <span style={{fontSize: '14px', color: '#555'}}> ({candidate.title || 'N/A'})</span>
+                      </h3>
+                      {candidate.source_url && candidate.source_url !== '#' && (
+                          <a href={candidate.source_url} target="_blank" rel="noopener noreferrer" style={{fontSize: '12px'}}>Source</a>
+                      )}
+                  </div>
+                  <p style={{margin: '5px 0', fontSize: '14px', fontWeight: 'bold'}}>
+                    Overall Match Score: {candidate.match_score.toFixed(3)}
                 </p>
                 <p style={{margin: '5px 0', fontSize: '12px', color: '#333'}}>
                   Percentile Rank: {candidate.percentile_rank.toFixed(1)}%
@@ -372,6 +411,14 @@ export default function HomePage() {
             ))}
           </ul>
         </div>
+      )}
+
+      {isOutreachModalOpen && (
+        <OutreachModal
+          isOpen={isOutreachModalOpen}
+          onClose={() => setIsOutreachModalOpen(false)}
+          selectedCandidateIds={selectedCandidateIds}
+        />
       )}
     </div>
   );

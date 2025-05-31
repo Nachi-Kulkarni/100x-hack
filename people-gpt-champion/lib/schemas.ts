@@ -138,3 +138,200 @@ export type IWorkExperience = z.infer<typeof WorkExperienceSchema>;
 export type IEducation = z.infer<typeof EducationSchema>;
 export type ICertification = z.infer<typeof CertificationSchema>;
 export type IParsedResume = z.infer<typeof ParsedResumeSchema>;
+
+// Schema for the request body of the generate-outreach API
+export const GenerateOutreachRequestBodySchema = z.object({
+  template: z.enum(["intro", "job_opp", "follow_up"]),
+  vars: z.record(z.string(), z.any()), // Allows any dynamic variables
+  tone: z.string().min(1, { message: "Tone cannot be empty." }),
+  channel: z.enum(["email", "slack"]),
+  candidateId: z.string().cuid({ message: "Invalid Candidate ID format." }).optional(),
+  outreachProfile: OutreachProfileResponseSchema.optional(), // Defined earlier
+});
+
+// Schema for the email response of the generate-outreach API
+export const EmailOutreachResponseSchema = z.object({
+  subject: z.string(),
+  body: z.string(),
+});
+
+// Schema for the Slack response of the generate-outreach API
+export const SlackOutreachResponseSchema = z.object({
+  message: z.string(),
+});
+
+// TypeScript types inferred from the new schemas
+export type IGenerateOutreachRequestBody = z.infer<typeof GenerateOutreachRequestBodySchema>;
+export type IEmailOutreachResponse = z.infer<typeof EmailOutreachResponseSchema>;
+export type ISlackOutreachResponse = z.infer<typeof SlackOutreachResponseSchema>;
+
+// Schema for the request body of the send-email API
+export const SendEmailRequestBodySchema = z.object({
+  to: z.string().email({ message: "Invalid 'to' email address (recipientEmail)." }),
+  templateVersionId: z.string().cuid({ message: "Invalid Template Version ID." }),
+  candidateId: z.string().cuid({ message: "Invalid Candidate ID format." }).optional(),
+});
+
+// Schema for the success response of the send-email API
+export const SendEmailSuccessResponseSchema = z.object({
+  success: z.literal(true),
+  messageId: z.string(),
+});
+
+// TypeScript types inferred from the new email schemas
+export type ISendEmailRequestBody = z.infer<typeof SendEmailRequestBodySchema>;
+export type ISendEmailSuccessResponse = z.infer<typeof SendEmailSuccessResponseSchema>;
+
+// Schema for the request body of the send-slack-message API
+export const SendSlackMessageRequestBodySchema = z.object({
+  userId: z.string().min(1, { message: "Slack User ID cannot be empty." }),
+  message: z.string().min(1, { message: "Message cannot be empty." }),
+  candidateId: z.string().cuid({ message: "Invalid Candidate ID format." }).optional(),
+});
+
+// Schema for the success response of the send-slack-message API
+export const SendSlackMessageSuccessResponseSchema = z.object({
+  success: z.literal(true),
+  messageId: z.string(), // Slack's message timestamp (ts)
+});
+
+// TypeScript types inferred from the new Slack message schemas
+export type ISendSlackMessageRequestBody = z.infer<typeof SendSlackMessageRequestBodySchema>;
+export type ISendSlackMessageSuccessResponse = z.infer<typeof SendSlackMessageSuccessResponseSchema>;
+
+// Schemas for Resend Webhook Payloads
+// Base for common data, specific event types can extend this if needed.
+const ResendWebhookBaseDataSchema = z.object({
+  email_id: z.string().cuid2().optional(), // This is the Resend message ID. Optional as not all webhooks might have it.
+  created_at: z.string().datetime(), // Timestamp of the event
+});
+
+// Specific event types from Resend documentation (ensure these match actual payloads)
+// https://resend.com/docs/api-reference/webhooks/event-types
+// For example: 'email.sent', 'email.delivered', 'email.opened', 'email.clicked', 'email.bounced', 'email.complained'
+export const ResendWebhookEventSchema = z.object({
+  type: z.enum([
+    'email.sent',
+    'email.delivered',
+    'email.opened',
+    'email.clicked',
+    'email.bounced',
+    'email.complained',
+    // Add other event types as needed
+  ]),
+  data: z.object({ // Data structure can vary greatly per event type
+    email_id: z.string({ message: "Resend message ID (email_id) is required." }), // Expecting this for relevant events
+    created_at: z.string().datetime({ message: "Event timestamp (created_at) is required." }),
+    // Include other fields from `data` object as needed, e.g.:
+    // to: z.array(z.string().email()).optional(), // For sent/delivered
+    // subject: z.string().optional(), // For sent/delivered
+    // ip_address: z.string().optional(), // For opened/clicked
+    // user_agent: z.string().optional(), // For opened/clicked
+    // link: z.string().url().optional(), // For clicked
+  }).passthrough(), // Allow other fields in `data` but don't validate them strictly yet
+});
+
+// TypeScript type for the Resend webhook event
+export type IResendWebhookEvent = z.infer<typeof ResendWebhookEventSchema>;
+
+// Schema for the request body of the send-sms API
+export const SendSmsRequestBodySchema = z.object({
+  to: z.string().regex(/^\+[1-9]\d{1,14}$/, { message: "Invalid 'to' phone number (must be E.164 format)." }),
+  body: z.string().min(1, { message: "SMS body cannot be empty." }).max(1600, { message: "SMS body is too long." }), // Max 1600 chars for Twilio
+  candidateId: z.string().cuid({ message: "Invalid Candidate ID format." }).optional(),
+});
+
+// Schema for the success response of the send-sms API
+export const SendSmsSuccessResponseSchema = z.object({
+  success: z.literal(true),
+  messageSid: z.string(), // Twilio Message SID
+});
+
+// TypeScript types inferred from the new SMS schemas
+export type ISendSmsRequestBody = z.infer<typeof SendSmsRequestBodySchema>;
+export type ISendSmsSuccessResponse = z.infer<typeof SendSmsSuccessResponseSchema>;
+
+// Schema for a single Email Template Version (for API responses)
+export const EmailTemplateVersionApiResponseSchema = z.object({
+  id: z.string().cuid(),
+  templateId: z.string().cuid(),
+  subject: z.string(),
+  body: z.string(),
+  versionNumber: z.number().int(),
+  isArchived: z.boolean(),
+  createdAt: z.string().datetime(), // Or z.date() if transformed
+  updatedAt: z.string().datetime(), // Or z.date()
+});
+
+// Schema for a single Email Template including its versions (for API responses)
+export const EmailTemplateApiResponseSchema = z.object({
+  id: z.string().cuid(),
+  name: z.string(),
+  createdAt: z.string().datetime(), // Or z.date()
+  updatedAt: z.string().datetime(), // Or z.date()
+  versions: z.array(EmailTemplateVersionApiResponseSchema),
+});
+
+// Schema for the response of the /api/email-templates route
+export const EmailTemplatesApiResponseSchema = z.array(EmailTemplateApiResponseSchema);
+
+// TypeScript types inferred from these schemas
+export type IEmailTemplateVersionApiResponse = z.infer<typeof EmailTemplateVersionApiResponseSchema>;
+export type IEmailTemplateApiResponse = z.infer<typeof EmailTemplateApiResponseSchema>;
+export type IEmailTemplatesApiResponse = z.infer<typeof EmailTemplatesApiResponseSchema>;
+
+// Schema for query parameters for /api/outreach-history
+export const OutreachHistoryQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).optional().default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).optional().default(10),
+  // Add other filter parameters here if needed, e.g., channel, templateId, dateRange
+});
+
+// Schema for a single EmailOutreach record in the history response (including related data)
+export const EmailOutreachHistoryItemSchema = z.object({
+  id: z.string().cuid(),
+  recipientEmail: z.string().email(),
+  sentAt: z.string().datetime(), // Or z.date()
+  resendMessageId: z.string(),
+  status: z.string(),
+  openedAt: z.string().datetime().nullable(), // Or z.date().nullable()
+  clickedAt: z.string().datetime().nullable(), // Or z.date().nullable()
+  templateVersion: z.object({
+    id: z.string().cuid(),
+    versionNumber: z.number().int(),
+    subject: z.string(), // Include subject for display
+    template: z.object({
+      id: z.string().cuid(),
+      name: z.string(), // Template name for display
+    }),
+  }),
+});
+
+// Schema for the response of the /api/outreach-history route
+export const OutreachHistoryResponseSchema = z.object({
+  data: z.array(EmailOutreachHistoryItemSchema),
+  total: z.number().int(),
+  page: z.number().int(),
+  pageSize: z.number().int(),
+  totalPages: z.number().int(),
+});
+
+// TypeScript types
+export type IOutreachHistoryQuery = z.infer<typeof OutreachHistoryQuerySchema>;
+export type IEmailOutreachHistoryItem = z.infer<typeof EmailOutreachHistoryItemSchema>;
+export type IOutreachHistoryResponse = z.infer<typeof OutreachHistoryResponseSchema>;
+
+// Schema for the /api/candidate/{id}/outreach-profile response
+export const OutreachProfileResponseSchema = z.object({
+  id: z.string().cuid(),
+  name: z.string(),
+  email: z.string().email().optional().nullable(),
+  phone: z.string().optional().nullable(),
+  headline: z.string().optional().nullable(), // e.g., current role or general title
+  keySkills: z.array(z.string()).optional(),
+  experienceSummary: z.string().optional().nullable(), // Brief textual summary
+  educationSummary: z.string().optional().nullable(), // Brief textual summary
+});
+
+// TypeScript type inferred from the schema
+export type IOutreachProfileResponse = z.infer<typeof OutreachProfileResponseSchema>;
