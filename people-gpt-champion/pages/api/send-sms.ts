@@ -1,8 +1,22 @@
 // people-gpt-champion/pages/api/send-sms.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { SendSmsRequestBodySchema } from '../../lib/schemas';
+import { Role } from '@prisma/client'; // Import Role
+import {
+    SendSmsRequestBodySchema,
+    SendSmsSuccessResponseSchema, // For typing success response
+    IApiErrorResponse,            // For typing error response
+    OutreachSentDetailsSchema     // For audit log details
+} from '../../lib/schemas';
 import { sendSms } from '../../lib/twilio';
-import { getFeatureFlag, createAnonymousUser } from '../../lib/launchdarkly'; // Assuming user context might be basic for API routes initially
+import { getFeatureFlag, createAnonymousUser } from '../../lib/launchdarkly';
+import { withRoleProtection } from '../../lib/authUtils';
+import { handleZodError, sendErrorResponse, sendSuccessResponse } from '../../lib/apiUtils';
+import { createAuditLog } from '../../lib/auditLog'; // Import createAuditLog
+import { getServerSession } from 'next-auth/next';   // For getting userId
+import { authOptions } from '../auth/[...nextauth]'; // For getting userId
+import { ZodError } from 'zod';
+import { z } from 'zod'; // For inferring type for audit log details
+import { rateLimiter, runMiddleware } from '../../lib/rateLimit'; // Import rate limiting
 
 /**
  * @swagger
@@ -67,61 +81,106 @@ import { getFeatureFlag, createAnonymousUser } from '../../lib/launchdarkly'; //
  *           description: The Twilio Message SID.
  *           example: "SMxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
  */
-export default async function handler(
+async function sendSmsHandler(
   req: NextApiRequest,
-  res: NextApiResponse
+  res: NextApiResponse // Typed as <SendSmsSuccessResponseSchema (inferred) | IApiErrorResponse>
 ) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return res.status(405).json({ success: false, error: `Method ${req.method} Not Allowed` });
-  }
+  // Method and role checks handled by wrappers
 
-  // Feature Flag Check
   try {
-    // For server-side API routes, user context might be simple (e.g., system user or anonymous)
-    // or could be derived from auth tokens if available.
-    const ldUser = createAnonymousUser(); // Or derive a more specific user context
+    const session = await getServerSession(req, res, authOptions); // Get session for audit logging
+    const currentUserId = session?.user?.id;
+
+    // Feature Flag Check
+    const ldUser = createAnonymousUser(); // User context for LD might need to be enhanced if roles affect flags
     const isTwilioSmsEnabled = await getFeatureFlag('twilio-sms-outreach', ldUser, false);
 
     if (!isTwilioSmsEnabled) {
       console.log("Attempt to use send-sms API while 'twilio-sms-outreach' flag is disabled.");
-      return res.status(501).json({ success: false, error: 'SMS functionality is currently disabled.' });
+      return sendErrorResponse(res, 501, 'SMS functionality is currently disabled.');
     }
-  } catch (ldError: any) {
-    console.error('LaunchDarkly error in /api/send-sms:', ldError);
-    // Fail gracefully if LD check fails, perhaps default to disabled or log and continue if appropriate
-    return res.status(500).json({ success: false, error: 'Error checking feature flag status.' });
+
+    // Validate request body
+    const validationResult = SendSmsRequestBodySchema.safeParse(req.body);
+    if (!validationResult.success) {
+      throw validationResult.error; // Caught by ZodError handler
+    }
+    const { to, body, candidateId } = validationResult.data;
+
+    if (candidateId) {
+      console.log(`SMS message initiated. Associated with candidateId: ${candidateId}`);
+      // Note: No database persistence for SMS messages in this current implementation.
+    }
+
+    const messageSid = await sendSms(to, body);
+
+    // Audit log the successful SMS send
+    if (currentUserId) {
+      const auditDetails: z.infer<typeof OutreachSentDetailsSchema> = {
+        channel: "sms",
+        recipient: to, // Phone number
+        candidateId: candidateId || null,
+        messageId: messageSid,
+      };
+      const parsedAuditDetails = OutreachSentDetailsSchema.safeParse(auditDetails);
+      if (parsedAuditDetails.success) {
+        await createAuditLog({
+          userId: currentUserId,
+          action: "OUTREACH_SENT",
+          entity: "SmsMessage",
+          entityId: messageSid, // Using Twilio SID as entityId
+          details: parsedAuditDetails.data,
+        });
+      } else {
+        console.warn("Failed to validate OUTREACH_SENT (sms) audit details:", parsedAuditDetails.error);
+      }
+    }
+
+    return sendSuccessResponse(res, 200, { success: true, messageSid: messageSid });
+
+  } catch (error: any) {
+    if (error instanceof ZodError) {
+      return handleZodError(error, res);
+    }
+    // Handle LaunchDarkly error specifically if needed, or let it fall through
+    if (error.message && error.message.includes('LaunchDarkly')) { // Basic check
+        console.error('LaunchDarkly error in /api/send-sms:', error);
+        return sendErrorResponse(res, 500, 'Error checking feature flag status.');
+    }
+    console.error(`Error in /api/send-sms for recipient ${req.body?.to}:`, error);
+    const errorMessage = error.message || 'An unexpected error occurred while sending the SMS.';
+    if (errorMessage.includes('environment variable is not set')) { // Twilio config error
+      return sendErrorResponse(res, 500, `Server configuration error: ${errorMessage}`);
+    }
+    return sendErrorResponse(res, 500, `Failed to send SMS: ${errorMessage}`);
   }
+}
 
-  // Validate request body
-  const validationResult = SendSmsRequestBodySchema.safeParse(req.body);
-  if (!validationResult.success) {
-    return res.status(400).json({ success: false, error: validationResult.error.flatten() });
-  }
 
-  const { to, body, candidateId } = validationResult.data; // Added candidateId
+const sendSmsRateLimiter = rateLimiter({
+  windowSeconds: 10 * 60, // 10 minutes
+  maxRequests: 5,
+  keyPrefix: 'send_sms',
+});
 
-  if (candidateId) {
-    console.log(`SMS message initiated. Associated with candidateId: ${candidateId}`);
-    // Note: No database persistence for SMS messages in this current implementation.
-    // If an SmsOutreach table existed, candidateId would be stored there.
+const protectedSendSmsHandler = withRoleProtection(sendSmsHandler, [Role.ADMIN, Role.RECRUITER]);
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', ['POST']);
+    return sendErrorResponse(res, 405, `Method ${req.method} Not Allowed`);
   }
 
   try {
-    // TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER are expected to be set as env vars
-    // and are used by getTwilioClient() in lib/twilio.ts.
-    // sendSms will throw if these are not configured.
-    const messageSid = await sendSms(to, body);
-
-    return res.status(200).json({ success: true, messageSid: messageSid });
-
+    await runMiddleware(req, res, sendSmsRateLimiter);
   } catch (error: any) {
-    console.error(`Error in /api/send-sms for recipient ${to}:`, error);
-    const errorMessage = error.message || 'An unexpected error occurred while sending the SMS.';
-    // Check for specific configuration errors from lib/twilio.ts
-    if (errorMessage.includes('environment variable is not set')) {
-      return res.status(500).json({ success: false, error: `Server configuration error: ${errorMessage}` });
+    if (error.message.includes("Too Many Requests")) {
+      console.warn(`Rate limit exceeded for send-sms from IP: ${req.ip || req.headers['x-forwarded-for']}`);
+    } else {
+      console.error("Error in send-sms rate limiting middleware:", error);
     }
-    return res.status(500).json({ success: false, error: `Failed to send SMS: ${errorMessage}` });
+    return;
   }
+
+  return protectedSendSmsHandler(req, res);
 }

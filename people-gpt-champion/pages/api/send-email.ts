@@ -1,10 +1,29 @@
 // people-gpt-champion/pages/api/send-email.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { PrismaClient } from '@prisma/client';
-import { SendEmailRequestBodySchema } from '../../lib/schemas';
+import { PrismaClient, Role } from '@prisma/client'; // Import Role
+import {
+    SendEmailRequestBodySchema,
+    SendEmailSuccessResponseSchema, // For typing success response
+    IApiErrorResponse,             // For typing error response
+    OutreachSentDetailsSchema      // For audit log details
+} from '../../lib/schemas';
 import { sendEmail, EmailOptions } from '../../lib/resend';
+import { withRoleProtection } from '../../lib/authUtils';
+import { handleZodError, sendErrorResponse, sendSuccessResponse } from '../../lib/apiUtils';
+import { createAuditLog } from '../../lib/auditLog'; // Import createAuditLog
+import { getServerSession } from 'next-auth/next';   // For getting userId
+import { authOptions } from '../auth/[...nextauth]'; // For getting userId
+import { ZodError } from 'zod';
+import { z } from 'zod'; // For inferring type for audit log details
+import { rateLimiter, runMiddleware } from '../../lib/rateLimit'; // Import rate limiting
 
 const prisma = new PrismaClient();
+
+const sendEmailRateLimiter = rateLimiter({
+  windowSeconds: 5 * 60, // 5 minutes
+  maxRequests: 10,
+  keyPrefix: 'send_email',
+});
 
 /**
  * @swagger
@@ -66,44 +85,42 @@ const prisma = new PrismaClient();
  *          type: string
  *          example: "00000000-0000-0000-0000-000000000000"
  */
-export default async function handler(
+async function sendEmailHandler(
   req: NextApiRequest,
-  res: NextApiResponse
+  res: NextApiResponse // Type will be <SendEmailSuccessResponseSchema (or inferred type) | IApiErrorResponse>
 ) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return res.status(405).json({ success: false, error: `Method ${req.method} Not Allowed` });
-  }
-
-  // Validate request body
-  const validationResult = SendEmailRequestBodySchema.safeParse(req.body);
-  if (!validationResult.success) {
-    return res.status(400).json({ success: false, error: validationResult.error.flatten() });
-  }
-
-  // Data now contains `to` (for recipientEmail), `templateVersionId`, and optionally `candidateId`
-  const { to: recipientEmail, templateVersionId, candidateId } = validationResult.data;
-
-  const fromEmail = process.env.RESEND_FROM_EMAIL;
-  if (!fromEmail) {
-    console.error('RESEND_FROM_EMAIL environment variable is not set.');
-    return res.status(500).json({ success: false, error: 'Server configuration error: From email not set.' });
-  }
+  // Method and role checks are handled by withRoleProtection or the main export default
 
   try {
+    const session = await getServerSession(req, res, authOptions); // Get session for audit logging
+    const currentUserId = session?.user?.id;
+
+    // Validate request body
+    const validationResult = SendEmailRequestBodySchema.safeParse(req.body);
+    if (!validationResult.success) {
+      throw validationResult.error; // Caught by ZodError handler
+    }
+    const { to: recipientEmail, templateVersionId, candidateId } = validationResult.data;
+
+    const fromEmail = process.env.RESEND_FROM_EMAIL;
+    if (!fromEmail) {
+      console.error('RESEND_FROM_EMAIL environment variable is not set.');
+      return sendErrorResponse(res, 500, 'Server configuration error: From email not set.');
+    }
+
     // 1. Fetch the template version from the database
     const templateVersion = await prisma.emailTemplateVersion.findUnique({
       where: { id: templateVersionId },
     });
 
     if (!templateVersion) {
-      return res.status(404).json({ success: false, error: 'Email template version not found.' });
+      return sendErrorResponse(res, 404, 'Email template version not found.');
     }
     if (templateVersion.isArchived) {
-      return res.status(404).json({ success: false, error: 'Email template version is archived and cannot be used.' });
+      return sendErrorResponse(res, 400, 'Email template version is archived and cannot be used.'); // 400 as it's a client error to use archived one
     }
 
-    const { subject, body } = templateVersion; // Fetched from DB
+    const { subject, body } = templateVersion;
 
     // 2. Send the email using Resend
     const emailOptions: EmailOptions = {
@@ -117,10 +134,8 @@ export default async function handler(
 
     if (!resendResponse || !resendResponse.id) {
       console.error('Resend response did not include an ID, or data was null/undefined.');
-      // This indicates an issue with the Resend call itself or its response format not matching expectations.
-      return res.status(500).json({ success: false, error: 'Failed to send email due to an issue with the email provider response.' });
+      return sendErrorResponse(res, 500, 'Failed to send email due to an issue with the email provider response.');
     }
-
     const resendMessageId = resendResponse.id;
 
     // 3. Create EmailOutreach record in the database
@@ -140,22 +155,65 @@ export default async function handler(
       data: outreachData,
     });
 
-    // Return success response with the Resend message ID
-    return res.status(200).json({ success: true, messageId: resendMessageId });
+    // Audit log the successful email send
+    if (currentUserId) {
+      const auditDetails: z.infer<typeof OutreachSentDetailsSchema> = {
+        channel: "email",
+        recipient: recipientEmail,
+        candidateId: candidateId || null, // Ensure null if undefined
+        templateId: templateVersionId,
+        messageId: resendMessageId,
+      };
+      const parsedAuditDetails = OutreachSentDetailsSchema.safeParse(auditDetails);
+      if (parsedAuditDetails.success) {
+        await createAuditLog({
+          userId: currentUserId,
+          action: "OUTREACH_SENT",
+          entity: "EmailOutreach",
+          entityId: resendMessageId, // Using Resend ID as entityId for this log
+          details: parsedAuditDetails.data,
+        });
+      } else {
+        console.warn("Failed to validate OUTREACH_SENT (email) audit details:", parsedAuditDetails.error);
+      }
+    }
+
+    return sendSuccessResponse(res, 200, { success: true, messageId: resendMessageId });
 
   } catch (error: any) {
-    console.error('Error processing /api/send-email:', error);
-    // Check for specific Prisma errors, e.g., record not found for relation if templateVersionId was invalid for the create step
-    if (error.code === 'P2025') {
-        return res.status(404).json({ success: false, error: 'Database error: Referenced template version not found for outreach log creation.' });
+    if (error instanceof ZodError) {
+      return handleZodError(error, res);
     }
-    const errorMessage = error.message || 'An unexpected error occurred while processing the request.';
-    return res.status(500).json({ success: false, error: `Failed to process request: ${errorMessage}` });
+    console.error('Error processing /api/send-email:', error);
+    if (error.code === 'P2025') { // Prisma's "Record to update not found"
+        return sendErrorResponse(res, 404, 'Database error: Referenced template version not found for outreach log creation.');
+    }
+    return sendErrorResponse(res, 500, `Failed to process request: ${error.message || 'An unexpected error occurred'}`);
   } finally {
-    // Ensure Prisma client is disconnected after each request
     await prisma.$disconnect().catch(async (e) => {
       console.error("Failed to disconnect Prisma client", e);
-      // Optionally, handle or log this more formally if needed
     });
   }
+}
+
+const protectedSendEmailHandler = withRoleProtection(sendEmailHandler, [Role.ADMIN, Role.RECRUITER]);
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', ['POST']);
+    return sendErrorResponse(res, 405, `Method ${req.method} Not Allowed`);
+  }
+
+  try {
+    await runMiddleware(req, res, sendEmailRateLimiter);
+  } catch (error: any) {
+    if (error.message.includes("Too Many Requests")) {
+      console.warn(`Rate limit exceeded for send-email from IP: ${req.ip || req.headers['x-forwarded-for']}`);
+    } else {
+      console.error("Error in send-email rate limiting middleware:", error);
+    }
+    return;
+  }
+
+  return protectedSendEmailHandler(req, res);
 }
