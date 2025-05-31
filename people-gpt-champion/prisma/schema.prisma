@@ -1,0 +1,81 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Candidate {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  name      String
+  email     String   @unique
+  linkedinUrl String?
+  githubUrl   String?
+  resumeText  String?
+  skills    Json?    // Store as JSON array of strings
+  experienceYears Int?
+  vectorEmbedding Bytes? // For Pinecone or pgvector
+  rankings  Ranking[]
+  outreaches OutreachLog[]
+}
+
+model Query {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  queryText String
+  filters   Json?
+  rankings  Ranking[]
+}
+
+model Ranking {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  query       Query    @relation(fields: [queryId], references: [id])
+  queryId     String
+  candidate   Candidate @relation(fields: [candidateId], references: [id])
+  candidateId String
+  rank        Int
+  score       Float
+  reason      String?
+  unique (queryId, candidateId)
+}
+
+model OutreachLog {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  candidate   Candidate @relation(fields: [candidateId], references: [id])
+  candidateId String
+  channel     String   // e.g., "email", "linkedin"
+  status      String   // e.g., "sent", "opened", "replied", "failed"
+  errorMessage String?
+  sentAt      DateTime?
+  openedAt    DateTime?
+  repliedAt   DateTime?
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  userId    String?  // User performing the action, if applicable
+  action    String   // e.g., "create_candidate", "run_query", "send_outreach"
+  details   Json?    // Additional details about the action
+  entity    String?  // e.g., "Candidate", "Query"
+  entityId  String?
+}
+
+model FeatureFlag {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  key       String   @unique // The flag key used in code, e.g., "streamingSearch"
+  value     Boolean  // true for on, false for off
+  description String?
+}
