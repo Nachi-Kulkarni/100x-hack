@@ -28,6 +28,7 @@ model Candidate {
   vectorEmbedding Bytes? // For Pinecone or pgvector
   rankings  Ranking[]
   outreaches OutreachLog[]
+  emailOutreaches EmailOutreach[] // Relation to specific A/B test email outreaches
 }
 
 model Query {
@@ -82,4 +83,49 @@ model FeatureFlag {
   key       String   @unique // The flag key used in code, e.g., "streamingSearch"
   value     Boolean  // true for on, false for off
   description String?
+}
+
+// Models for A/B Testing Email Templates
+model EmailTemplate {
+  id        String   @id @default(cuid())
+  name      String   @unique // e.g., "Intro Email Q1" - made unique for easier lookup
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  versions  EmailTemplateVersion[]
+}
+
+model EmailTemplateVersion {
+  id              String   @id @default(cuid())
+  templateId      String
+  template        EmailTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade) // Ensure cascade delete if a template is removed
+  subject         String
+  body            String   @db.Text // Use Text type for potentially long HTML bodies
+  versionNumber   Int
+  isArchived      Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt // Added for tracking updates to a version
+  outreaches      EmailOutreach[]
+
+  @@unique([templateId, versionNumber])
+  @@index([templateId]) // Index for faster queries on templateId
+}
+
+model EmailOutreach {
+  id                String   @id @default(cuid())
+  templateVersionId String
+  templateVersion   EmailTemplateVersion @relation(fields: [templateVersionId], references: [id])
+  recipientEmail    String
+  sentAt            DateTime @default(now())
+  resendMessageId   String   @unique // From Resend response, for webhook matching
+  status            String   @default("sent") // e.g., "sent", "delivered", "opened", "clicked", "bounced", "complained"
+  openedAt          DateTime?
+  clickedAt         DateTime?
+
+  // Link to Candidate (optional)
+  candidateId       String?     @map("candidate_id")
+  candidate         Candidate?  @relation(fields: [candidateId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([templateVersionId])
+  @@index([resendMessageId]) // Index for faster webhook lookups
+  @@index([candidateId])     // Index for the new foreign key
 }
